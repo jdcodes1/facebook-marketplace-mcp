@@ -6,6 +6,10 @@ import { FacebookClient } from "./facebook/client.js";
 import { searchListingsSchema, createSearchHandler } from "./tools/search.js";
 import { getListingSchema, createListingHandler } from "./tools/listing.js";
 import {
+  searchLocationSchema,
+  createLocationHandler,
+} from "./tools/location.js";
+import {
   monitorSearchSchema,
   checkMonitorsSchema,
   deleteMonitorSchema,
@@ -40,6 +44,14 @@ server.tool(
   "Get full details for a specific Facebook Marketplace listing",
   getListingSchema,
   createListingHandler(client)
+);
+
+// Search for a location (get coordinates)
+server.tool(
+  "search_location",
+  "Look up a city/town name to get coordinates for use with search_listings",
+  searchLocationSchema,
+  createLocationHandler(client)
 );
 
 // Save a search monitor
