@@ -23,7 +23,20 @@ const GRAPHQL_URL = "https://www.facebook.com/api/graphql/";
 const MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
 
 const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": USER_AGENT,
+  "Accept-Language": "en-US,en;q=0.9",
+  "sec-ch-ua": '"Chromium";v="146", "Google Chrome";v="146", "Not?A_Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+  "sec-fetch-dest": "document",
+  "sec-fetch-mode": "navigate",
+  "sec-fetch-site": "none",
+  "sec-fetch-user": "?1",
+  "Upgrade-Insecure-Requests": "1",
+};
 
 export class FacebookClient {
   private session: FacebookSession | null = null;
@@ -87,11 +100,10 @@ export class FacebookClient {
 
     const res = await fetch(MARKETPLACE_URL, {
       headers: {
+        ...BROWSER_HEADERS,
         Cookie: cookieHeader,
-        "User-Agent": USER_AGENT,
         Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       },
       redirect: "follow",
     });
@@ -157,12 +169,16 @@ export class FacebookClient {
     const res = await fetch(GRAPHQL_URL, {
       method: "POST",
       headers: {
+        ...BROWSER_HEADERS,
         Cookie: session.cookieHeader,
-        "User-Agent": USER_AGENT,
         "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "*/*",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
         "sec-fetch-site": "same-origin",
         Origin: "https://www.facebook.com",
         Referer: "https://www.facebook.com/marketplace/",
+        "X-FB-LSD": session.lsd,
       },
       body: body.toString(),
     });
@@ -215,10 +231,10 @@ export class FacebookClient {
     const url = `https://www.facebook.com/marketplace/item/${listingId}/`;
     const res = await fetch(url, {
       headers: {
+        ...BROWSER_HEADERS,
         Cookie: session.cookieHeader,
-        "User-Agent": USER_AGENT,
         Accept:
-          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       },
       redirect: "follow",
     });

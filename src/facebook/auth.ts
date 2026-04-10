@@ -58,6 +58,12 @@ function decryptCookieValue(encrypted: Buffer, key: Buffer): string {
     decoded = decoded.slice(0, decoded.length - padding);
   }
 
+  // Chrome prepends a 32-byte header to cookie values before encrypting.
+  // Skip it to get the actual value.
+  if (decoded.length > 32) {
+    decoded = decoded.slice(32);
+  }
+
   return decoded.toString("utf8");
 }
 
@@ -148,7 +154,13 @@ export function extractChromeCookies(
 }
 
 export function cookiesToHeader(cookies: FacebookCookie[]): string {
-  return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  return cookies
+    .map((c) => {
+      // Strip non-Latin1 chars — fetch rejects them in Cookie headers
+      const safe = c.value.replace(/[^\x00-\xFF]/g, "");
+      return `${c.name}=${safe}`;
+    })
+    .join("; ");
 }
 
 export function getCookieValue(
