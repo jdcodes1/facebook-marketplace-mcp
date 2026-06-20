@@ -83,11 +83,32 @@ export function parseListingDetailFromPage(
     /<meta\s+property="og:title"\s+content="([^"]*)"/
   );
   if (titleMatch) detail.title = decodeHtmlEntities(titleMatch[1]);
+  if (!detail.title) {
+    const titleJsonMatch = html.match(/"marketplace_listing_title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (titleJsonMatch) {
+      try {
+        detail.title = JSON.parse(`"${titleJsonMatch[1]}"`);
+      } catch {
+        detail.title = titleJsonMatch[1];
+      }
+    }
+  }
 
   const descMatch = html.match(
     /<meta\s+property="og:description"\s+content="([^"]*)"/
   );
   if (descMatch) detail.description = decodeHtmlEntities(descMatch[1]);
+  if (!detail.description) {
+    const descJsonMatch = html.match(/"redacted_description"\s*:\s*\{\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\}/) ?? 
+                      html.match(/"description"\s*:\s*\{\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"\}/);
+    if (descJsonMatch) {
+      try {
+        detail.description = JSON.parse(`"${descJsonMatch[1]}"`);
+      } catch {
+        detail.description = descJsonMatch[1];
+      }
+    }
+  }
 
   const imageMatch = html.match(
     /<meta\s+property="og:image"\s+content="([^"]*)"/
@@ -121,6 +142,22 @@ export function parseListingDetailFromPage(
   if (sellerMatch) {
     detail.sellerName = sellerMatch[1];
     detail.seller.name = sellerMatch[1];
+  } else {
+    const idx = html.indexOf('"marketplace_listing_seller"');
+    if (idx !== -1) {
+      const window = html.slice(idx, idx + 2000);
+      const nameMatch = window.match(/"name"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (nameMatch) {
+        try {
+          const parsedName = JSON.parse(`"${nameMatch[1]}"`);
+          detail.sellerName = parsedName;
+          detail.seller.name = parsedName;
+        } catch {
+          detail.sellerName = nameMatch[1];
+          detail.seller.name = nameMatch[1];
+        }
+      }
+    }
   }
 
   // Extract condition
