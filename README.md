@@ -68,6 +68,13 @@ Get full details for a specific listing.
 |-----------|------|----------|-------------|
 | `listing_id` | string | yes | Marketplace listing ID |
 
+### `search_location`
+Look up a city/town to get coordinates for `search_listings`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | yes | City, neighborhood, or ZIP (e.g. `Sarasota`, `Brooklyn NY`) |
+
 ### `monitor_search`
 Save a search as a monitor to track new listings over time.
 
@@ -94,11 +101,16 @@ List all saved monitors.
 ### `delete_monitor`
 Delete a saved monitor.
 
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | yes | Monitor name (note: `check_monitors` uses `monitor_name`) |
+
 ## Configuration
 
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
 | `CHROME_PROFILE` | `Default` | Chrome profile directory name |
+| `FB_MCP_DEBUG` | unset | Set to `1` to log whether listing data was matched in the page |
 
 ## Updating GraphQL Queries
 
