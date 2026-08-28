@@ -248,9 +248,10 @@ export class FacebookClient {
   }
 
   async searchLocation(
-    query: string
+    query: string,
+    viewerCoordinates?: { latitude: number; longitude: number }
   ): Promise<Array<{ name: string; latitude: number; longitude: number }>> {
-    const variables = buildLocationSearchVariables(query);
+    const variables = buildLocationSearchVariables(query, viewerCoordinates);
     const data = await this.graphqlRequest(LOCATION_SEARCH_DOC_ID, variables);
 
     try {

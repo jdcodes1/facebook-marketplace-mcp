@@ -110,7 +110,6 @@ Delete a saved monitor.
 | Env Variable | Default | Description |
 |-------------|---------|-------------|
 | `CHROME_PROFILE` | `Default` | Chrome profile directory name |
-| `FB_MCP_DEBUG` | unset | Set to `1` to log whether listing data was matched in the page |
 
 ## Updating GraphQL Queries
 
@@ -123,6 +122,29 @@ npm run capture-queries
 ```
 
 This opens a browser, navigates Marketplace, and captures current query IDs. Update `src/facebook/queries.ts` with the new values.
+
+Note that `capture-queries` launches Playwright against your real Chrome profile
+directory, so Chrome must be fully quit first or it will fail to launch.
+
+You can also capture them by hand without Playwright: open Marketplace in Chrome,
+run this in the DevTools console, then scroll the results to trigger a fetch.
+
+```js
+const rec = b => { const p = new URLSearchParams(b); const d = p.get('doc_id');
+  if (d) console.log(p.get('fb_api_req_friendly_name'), d); };
+const of = window.fetch;
+window.fetch = function (...a) {
+  const u = typeof a[0] === 'string' ? a[0] : a[0]?.url ?? '';
+  if (u.includes('/api/graphql') && typeof a[1]?.body === 'string') rec(a[1].body);
+  return of.apply(this, a);
+};
+```
+
+The two IDs this server needs are `CometMarketplaceSearchContentPaginationQuery`
+(search) and `MarketplaceSearchAddressDataSourceQuery` (location lookup).
+
+If results come back empty after a Facebook deploy, run with `FB_MCP_DEBUG=1` to
+see whether listing data is being matched in the page.
 
 ## Rate Limiting
 
