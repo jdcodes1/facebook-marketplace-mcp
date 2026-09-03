@@ -5,9 +5,9 @@ import type {
   MarketplaceListingDetail,
 } from "./types.js";
 import {
-  extractChromeCookies,
   cookiesToHeader,
   getCookieValue,
+  loadFacebookCookies,
 } from "./auth.js";
 import {
   MARKETPLACE_SEARCH_DOC_ID,
@@ -43,15 +43,18 @@ export class FacebookClient {
   private rateLimiter: RateLimiter;
   private reqCounter = 0;
   private chromeProfile: string;
+  private sessionFile?: string;
 
   constructor(
     options: {
       maxRequestsPerMinute?: number;
       chromeProfile?: string;
+      sessionFile?: string;
     } = {}
   ) {
     this.rateLimiter = new RateLimiter(options.maxRequestsPerMinute ?? 3);
     this.chromeProfile = options.chromeProfile ?? "Default";
+    this.sessionFile = options.sessionFile;
   }
 
   async ensureSession(): Promise<FacebookSession> {
@@ -60,18 +63,21 @@ export class FacebookClient {
   }
 
   async initSession(): Promise<FacebookSession> {
-    const cookies = extractChromeCookies("facebook.com", this.chromeProfile);
+    const cookies = loadFacebookCookies({
+      sessionFile: this.sessionFile,
+      chromeProfile: this.chromeProfile,
+    });
 
     if (cookies.length === 0) {
       throw new Error(
-        "No Facebook cookies found in Chrome. Make sure you're logged into Facebook in Chrome."
+        "No Facebook cookies found. Provide a valid FACEBOOK_SESSION_FILE or log into Facebook in Chrome."
       );
     }
 
     const userId = getCookieValue(cookies, "c_user");
     if (!userId) {
       throw new Error(
-        "No c_user cookie found. Make sure you're logged into Facebook in Chrome."
+        "No c_user cookie found. Provide a valid FACEBOOK_SESSION_FILE or log into Facebook in Chrome."
       );
     }
 
@@ -248,9 +254,10 @@ export class FacebookClient {
   }
 
   async searchLocation(
-    query: string
+    query: string,
+    viewerCoordinates?: { latitude: number; longitude: number }
   ): Promise<Array<{ name: string; latitude: number; longitude: number }>> {
-    const variables = buildLocationSearchVariables(query);
+    const variables = buildLocationSearchVariables(query, viewerCoordinates);
     const data = await this.graphqlRequest(LOCATION_SEARCH_DOC_ID, variables);
 
     try {

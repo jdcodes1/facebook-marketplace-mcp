@@ -4,12 +4,50 @@ import type {
   SearchResult,
 } from "./types.js";
 
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (isRecord(value) && typeof value.text === "string") return value.text;
+  return "";
+}
+
+function findListingConnection(root: unknown): JsonRecord | null {
+  const seen = new Set<object>();
+  const queue: unknown[] = [root];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!isRecord(current) || seen.has(current)) continue;
+    seen.add(current);
+
+    if (Array.isArray(current.edges)) {
+      const hasListing = current.edges.some((edge) => {
+        if (!isRecord(edge) || !isRecord(edge.node)) return false;
+        return (
+          isRecord(edge.node.listing) ||
+          typeof edge.node.marketplace_listing_title === "string"
+        );
+      });
+      if (hasListing) return current;
+    }
+
+    queue.push(...Object.values(current));
+  }
+
+  return null;
+}
+
 export function parseSearchResponse(data: unknown): SearchResult {
   try {
     const root = data as any;
     const feedUnits =
       root?.data?.marketplace_search?.feed_units ??
-      root?.data?.marketplace_search?.feed_units;
+      findListingConnection(root?.data);
 
     if (!feedUnits) {
       return { listings: [], hasNextPage: false, endCursor: null };
@@ -20,8 +58,8 @@ export function parseSearchResponse(data: unknown): SearchResult {
 
     const listings: MarketplaceListing[] = edges
       .map((edge: any) => {
-        const listing = edge?.node?.listing;
-        if (!listing) return null;
+        const listing = edge?.node?.listing ?? edge?.node;
+        if (!listing?.marketplace_listing_title && !listing?.id) return null;
 
         return {
           id: listing.id ?? "",
@@ -55,6 +93,66 @@ export function parseSearchResponse(data: unknown): SearchResult {
   }
 }
 
+function isListingNode(value: JsonRecord): boolean {
+  return (
+    typeof value.marketplace_listing_title === "string" ||
+    isRecord(value.listing_price) ||
+    isRecord(value.redacted_description) ||
+    isRecord(value.marketplace_listing_seller) ||
+    Array.isArray(value.listing_photos)
+  );
+}
+
+function mergeMissing(target: JsonRecord, source: JsonRecord): void {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined || value === null) continue;
+    const existing = target[key];
+    if (isRecord(existing) && isRecord(value)) {
+      mergeMissing(existing, value);
+    } else if (
+      existing === undefined ||
+      existing === null ||
+      existing === "" ||
+      (Array.isArray(existing) && existing.length === 0)
+    ) {
+      target[key] = value;
+    }
+  }
+}
+
+function findListingNodeInPage(html: string, listingId: string): JsonRecord | null {
+  const blocks = html.matchAll(
+    /<script[^>]+type=["']application\/json["'][^>]*>(.*?)<\/script>/gis
+  );
+  const merged: JsonRecord = {};
+  let matched = false;
+
+  for (const block of blocks) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(block[1]);
+    } catch {
+      continue;
+    }
+
+    const seen = new Set<object>();
+    const queue: unknown[] = [payload];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!isRecord(current) || seen.has(current)) continue;
+      seen.add(current);
+
+      if (String(current.id) === listingId && isListingNode(current)) {
+        mergeMissing(merged, current);
+        matched = true;
+      }
+      queue.push(...Object.values(current));
+    }
+  }
+
+  return matched ? merged : null;
+}
+
 export function parseListingDetailFromPage(
   html: string,
   listingId: string
@@ -78,62 +176,83 @@ export function parseListingDetailFromPage(
     seller: { name: "", profileUrl: "" },
   };
 
-  // Try to extract from meta tags first (most reliable)
+  // Pages contain related listings too; only use Relay nodes that match the
+  // requested ID, then merge the partial nodes Facebook emits for that item.
+  const listing = findListingNodeInPage(html, listingId);
+  if (listing) {
+    detail.title = textValue(listing.marketplace_listing_title);
+    const price = isRecord(listing.listing_price) ? listing.listing_price : undefined;
+    detail.price =
+      textValue(price?.formatted_amount_zeros_stripped) ||
+      textValue(price?.formatted_amount) ||
+      textValue(price?.amount);
+    const location = isRecord(listing.location) ? listing.location : undefined;
+    const reverseGeocode = isRecord(location?.reverse_geocode)
+      ? location.reverse_geocode
+      : undefined;
+    const cityPage = isRecord(reverseGeocode?.city_page)
+      ? reverseGeocode.city_page
+      : undefined;
+    detail.location =
+      textValue(isRecord(listing.location_text) ? listing.location_text.text : undefined) ||
+      textValue(cityPage?.display_name) ||
+      textValue(reverseGeocode?.city);
+    detail.description = textValue(
+      isRecord(listing.redacted_description)
+        ? listing.redacted_description.text
+        : isRecord(listing.description)
+          ? listing.description.text
+          : undefined
+    );
+    const seller = isRecord(listing.marketplace_listing_seller)
+      ? listing.marketplace_listing_seller
+      : undefined;
+    detail.sellerName = textValue(seller?.name);
+    detail.seller.name = detail.sellerName;
+    const sellerId = textValue(seller?.id);
+    if (sellerId) detail.seller.profileUrl = `https://www.facebook.com/${sellerId}`;
+    detail.condition = textValue(listing.condition) || textValue(listing.condition_text);
+    detail.isPending = listing.is_pending === true;
+    if (typeof listing.creation_time === "number") {
+      detail.postedDate = new Date(listing.creation_time * 1000).toISOString();
+    }
+    const primaryPhoto = isRecord(listing.primary_listing_photo)
+      ? listing.primary_listing_photo
+      : undefined;
+    const primaryImage = isRecord(primaryPhoto?.image) ? primaryPhoto.image : undefined;
+    const primaryUri = textValue(primaryImage?.uri);
+    if (primaryUri) {
+      detail.imageUrl = primaryUri;
+      detail.images.push(primaryUri);
+    }
+    if (Array.isArray(listing.listing_photos)) {
+      for (const photo of listing.listing_photos) {
+        const image = isRecord(photo) && isRecord(photo.image) ? photo.image : undefined;
+        const uri = textValue(image?.uri);
+        if (uri && !detail.images.includes(uri)) detail.images.push(uri);
+      }
+    }
+  }
+
+  // Open Graph metadata belongs to the current page and is a safe fallback for
+  // title, description, and hero-image fields when Relay markup changes.
   const titleMatch = html.match(
     /<meta\s+property="og:title"\s+content="([^"]*)"/
   );
-  if (titleMatch) detail.title = decodeHtmlEntities(titleMatch[1]);
+  if (!detail.title && titleMatch) detail.title = decodeHtmlEntities(titleMatch[1]);
 
   const descMatch = html.match(
     /<meta\s+property="og:description"\s+content="([^"]*)"/
   );
-  if (descMatch) detail.description = decodeHtmlEntities(descMatch[1]);
+  if (!detail.description && descMatch) detail.description = decodeHtmlEntities(descMatch[1]);
 
   const imageMatch = html.match(
     /<meta\s+property="og:image"\s+content="([^"]*)"/
   );
-  if (imageMatch) {
+  if (!detail.imageUrl && imageMatch) {
     detail.imageUrl = decodeHtmlEntities(imageMatch[1]);
     detail.images.push(detail.imageUrl);
   }
-
-  // Try to extract price from embedded JSON
-  const priceMatch =
-    html.match(/"formatted_amount"\s*:\s*"([^"]+)"/) ??
-    html.match(/"price"\s*:\s*"([^"]+)"/) ??
-    html.match(/\"amount\"\s*:\s*"([^"]+)"/);
-  if (priceMatch) detail.price = priceMatch[1];
-
-  // Extract additional images
-  const imageRegex = /marketplace_listing_photos.*?"uri"\s*:\s*"([^"]+)"/g;
-  let imgMatch;
-  while ((imgMatch = imageRegex.exec(html)) !== null) {
-    const url = imgMatch[1].replace(/\\\//g, "/");
-    if (!detail.images.includes(url)) {
-      detail.images.push(url);
-    }
-  }
-
-  // Extract seller name
-  const sellerMatch = html.match(
-    /"marketplace_listing_seller"\s*:\s*\{[^}]*"name"\s*:\s*"([^"]+)"/
-  );
-  if (sellerMatch) {
-    detail.sellerName = sellerMatch[1];
-    detail.seller.name = sellerMatch[1];
-  }
-
-  // Extract condition
-  const conditionMatch = html.match(
-    /"condition_text"\s*:\s*"([^"]+)"/
-  ) ?? html.match(/"condition"\s*:\s*"([^"]+)"/);
-  if (conditionMatch) detail.condition = conditionMatch[1];
-
-  // Extract location
-  const locationMatch = html.match(
-    /"location_text"\s*:\s*\{[^}]*"text"\s*:\s*"([^"]+)"/
-  ) ?? html.match(/"reverse_geocode_city"\s*:\s*"([^"]+)"/);
-  if (locationMatch) detail.location = locationMatch[1];
 
   return detail;
 }

@@ -9,19 +9,25 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "tsx --test test/*.test.ts",
+    "inspector": "npm run build && mcp-inspector node dist/index.js",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "capture-queries": "tsx scripts/capture-queries.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^13.0.3",
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/inspector": "^2.5.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

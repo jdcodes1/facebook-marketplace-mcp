@@ -23,6 +23,7 @@ import {
 const client = new FacebookClient({
   maxRequestsPerMinute: 3,
   chromeProfile: process.env.CHROME_PROFILE ?? "Default",
+  sessionFile: process.env.FACEBOOK_SESSION_FILE,
 });
 
 const server = new McpServer({
@@ -35,7 +36,7 @@ server.tool(
   "search_listings",
   "Search Facebook Marketplace listings by query, location, and filters",
   searchListingsSchema,
-  createSearchHandler(client)
+  createSearchHandler(client),
 );
 
 // Get listing details
@@ -43,7 +44,7 @@ server.tool(
   "get_listing",
   "Get full details for a specific Facebook Marketplace listing",
   getListingSchema,
-  createListingHandler(client)
+  createListingHandler(client),
 );
 
 // Search for a location (get coordinates)
@@ -51,7 +52,7 @@ server.tool(
   "search_location",
   "Look up a city/town name to get coordinates for use with search_listings",
   searchLocationSchema,
-  createLocationHandler(client)
+  createLocationHandler(client),
 );
 
 // Save a search monitor
@@ -59,7 +60,7 @@ server.tool(
   "monitor_search",
   "Save a search query as a monitor to track new listings over time",
   monitorSearchSchema,
-  createMonitorSearchHandler()
+  createMonitorSearchHandler(),
 );
 
 // Check monitors for new listings
@@ -67,7 +68,7 @@ server.tool(
   "check_monitors",
   "Check saved monitors for new listings since last check",
   checkMonitorsSchema,
-  createCheckMonitorsHandler(client)
+  createCheckMonitorsHandler(client),
 );
 
 // Delete a monitor
@@ -75,7 +76,7 @@ server.tool(
   "delete_monitor",
   "Delete a saved search monitor",
   deleteMonitorSchema,
-  createDeleteMonitorHandler()
+  createDeleteMonitorHandler(),
 );
 
 // List all monitors
@@ -83,7 +84,7 @@ server.tool(
   "list_monitors",
   "List all saved search monitors",
   listMonitorsSchema,
-  createListMonitorsHandler()
+  createListMonitorsHandler(),
 );
 
 // Start the server

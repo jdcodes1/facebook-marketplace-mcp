@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import Database from "better-sqlite3";
@@ -10,18 +11,71 @@ const CHROME_ITERATIONS = 1003;
 const CHROME_KEY_LENGTH = 16;
 const CHROME_IV = Buffer.alloc(16, " ");
 
+type CookieExtractor = (domain: string, profile?: string) => FacebookCookie[];
+
+interface CookieFileEntry {
+  name?: unknown;
+  value?: unknown;
+  host?: unknown;
+  domain?: unknown;
+  path?: unknown;
+  expires?: unknown;
+  expirationDate?: unknown;
+  secure?: unknown;
+  httpOnly?: unknown;
+  is_secure?: unknown;
+  is_httponly?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFacebookDomain(host: string): boolean {
+  const normalized = host.toLowerCase().replace(/^\./, "");
+  return normalized === "facebook.com" || normalized.endsWith(".facebook.com");
+}
+
+function toBoolean(value: unknown): boolean {
+  return value === true || value === 1;
+}
+
+function getExpiry(entry: CookieFileEntry): number {
+  const raw = entry.expirationDate ?? entry.expires;
+  if (raw === undefined || raw === null || raw === "") return 0;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
+    throw new Error("cookie expiry must be a non-negative number");
+  }
+  return raw;
+}
+
+function requireSessionCookies(cookies: FacebookCookie[]): FacebookCookie[] {
+  const nowInSeconds = Date.now() / 1000;
+  const activeCookies = cookies.filter(
+    (cookie) => cookie.expires === 0 || cookie.expires > nowInSeconds,
+  );
+
+  for (const name of ["c_user", "xs"]) {
+    if (!getCookieValue(activeCookies, name)) {
+      throw new Error(`session file has no active ${name} cookie`);
+    }
+  }
+
+  return activeCookies;
+}
+
 function getChromePassword(): string {
   try {
     return execSync(
       'security find-generic-password -w -s "Chrome Safe Storage" -a "Chrome"',
-      { stdio: ["pipe", "pipe", "pipe"] }
+      { stdio: ["pipe", "pipe", "pipe"] },
     )
       .toString()
       .trim();
   } catch {
     throw new Error(
       "Failed to get Chrome password from Keychain. " +
-        "Make sure Chrome is installed and you approve the Keychain prompt."
+        "Make sure Chrome is installed and you approve the Keychain prompt.",
     );
   }
 }
@@ -32,7 +86,7 @@ function deriveChromeKey(password: string): Buffer {
     CHROME_SALT,
     CHROME_ITERATIONS,
     CHROME_KEY_LENGTH,
-    "sha1"
+    "sha1",
   );
 }
 
@@ -72,13 +126,13 @@ function getCookieDbPath(profile = "Default"): string {
     os.homedir(),
     "Library/Application Support/Google/Chrome",
     profile,
-    "Cookies"
+    "Cookies",
   );
 }
 
 export function extractChromeCookies(
   domain: string,
-  profile = "Default"
+  profile = "Default",
 ): FacebookCookie[] {
   const cookiePath = getCookieDbPath(profile);
 
@@ -91,7 +145,7 @@ export function extractChromeCookies(
   } catch {
     throw new Error(
       `Failed to copy Chrome cookie DB from ${cookiePath}. ` +
-        "Make sure Chrome is installed and the profile exists."
+        "Make sure Chrome is installed and the profile exists.",
     );
   }
 
@@ -111,7 +165,7 @@ export function extractChromeCookies(
         `SELECT host_key, name, value, encrypted_value, path, expires_utc,
                 is_secure, is_httponly
          FROM cookies
-         WHERE host_key LIKE ?`
+         WHERE host_key LIKE ?`,
       )
       .all(`%${domain}`) as Array<{
       host_key: string;
@@ -126,11 +180,7 @@ export function extractChromeCookies(
 
     return rows.map((row) => {
       let value = row.value;
-      if (
-        !value &&
-        row.encrypted_value &&
-        row.encrypted_value.length > 0
-      ) {
+      if (!value && row.encrypted_value && row.encrypted_value.length > 0) {
         value = decryptCookieValue(row.encrypted_value, key);
       }
       return {
@@ -153,6 +203,100 @@ export function extractChromeCookies(
   }
 }
 
+/**
+ * Loads cookies from a user-managed JSON file. The file may be a cookie array
+ * or an object with a `cookies` array, matching common Chrome-export layouts.
+ */
+export function loadFacebookCookiesFromFile(
+  filePath: string,
+): FacebookCookie[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    throw new Error("could not read valid JSON from FACEBOOK_SESSION_FILE");
+  }
+
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.cookies)
+      ? parsed.cookies
+      : null;
+
+  if (!entries) {
+    throw new Error(
+      "session file must be a cookie array or an object with a cookies array",
+    );
+  }
+
+  const cookies = entries.map((entry, index): FacebookCookie => {
+    if (!isRecord(entry)) {
+      throw new Error(`cookie ${index + 1} must be an object`);
+    }
+
+    const cookie = entry as CookieFileEntry;
+    if (typeof cookie.name !== "string" || !cookie.name) {
+      throw new Error(`cookie ${index + 1} must have a name`);
+    }
+    if (typeof cookie.value !== "string" || !cookie.value) {
+      throw new Error(`cookie ${index + 1} must have a value`);
+    }
+
+    const host =
+      typeof cookie.domain === "string"
+        ? cookie.domain
+        : typeof cookie.host === "string"
+          ? cookie.host
+          : ".facebook.com";
+    if (!isFacebookDomain(host)) {
+      throw new Error(`cookie ${index + 1} is not scoped to facebook.com`);
+    }
+
+    return {
+      host,
+      name: cookie.name,
+      value: cookie.value,
+      path: typeof cookie.path === "string" ? cookie.path : "/",
+      expires: getExpiry(cookie),
+      secure: toBoolean(cookie.secure ?? cookie.is_secure),
+      httpOnly: toBoolean(cookie.httpOnly ?? cookie.is_httponly),
+    };
+  });
+
+  return requireSessionCookies(cookies);
+}
+
+export function loadFacebookCookies(options: {
+  sessionFile?: string;
+  chromeProfile?: string;
+  extractChrome?: CookieExtractor;
+}): FacebookCookie[] {
+  const extractChrome = options.extractChrome ?? extractChromeCookies;
+
+  console.log(options.chromeProfile, "chromeProfile");
+  if (!options.sessionFile) {
+    return extractChrome("facebook.com", options.chromeProfile);
+  }
+
+  try {
+    return loadFacebookCookiesFromFile(options.sessionFile);
+  } catch (fileError) {
+    try {
+      return extractChrome("facebook.com", options.chromeProfile);
+    } catch (chromeError) {
+      const fileMessage =
+        fileError instanceof Error ? fileError.message : "unknown file error";
+      const chromeMessage =
+        chromeError instanceof Error
+          ? chromeError.message
+          : "unknown Chrome error";
+      throw new Error(
+        `Could not load Facebook cookies from FACEBOOK_SESSION_FILE (${fileMessage}) or Chrome (${chromeMessage}).`,
+      );
+    }
+  }
+}
+
 export function cookiesToHeader(cookies: FacebookCookie[]): string {
   return cookies
     .map((c) => {
@@ -165,7 +309,7 @@ export function cookiesToHeader(cookies: FacebookCookie[]): string {
 
 export function getCookieValue(
   cookies: FacebookCookie[],
-  name: string
+  name: string,
 ): string | undefined {
   return cookies.find((c) => c.name === name)?.value;
 }
