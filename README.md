@@ -61,7 +61,7 @@ args = ["/path/to/facebook-marketplace-mcp/dist/index.js"]
 
 ## Tools
 
-### `search_listings`
+### `facebook_marketplace_search_listings`
 
 Search Marketplace by query, location, and filters.
 
@@ -76,7 +76,7 @@ Search Marketplace by query, location, and filters.
 | `category`  | string | no       | Category ID                 |
 | `limit`     | number | no       | Max results (default: 20)   |
 
-### `get_listing`
+### `facebook_marketplace_get_listing`
 
 Get full details for a specific listing.
 
@@ -84,7 +84,7 @@ Get full details for a specific listing.
 | ------------ | ------ | -------- | ---------------------- |
 | `listing_id` | string | yes      | Marketplace listing ID |
 
-### `search_location`
+### `facebook_marketplace_search_location`
 
 Look up a city, neighborhood, or ZIP code to get coordinates for
 `search_listings`.
@@ -93,7 +93,7 @@ Look up a city, neighborhood, or ZIP code to get coordinates for
 | --------- | ------ | -------- | --------------------------------------------- |
 | `query`   | string | yes      | Location text, such as `Boston MA` or `02108` |
 
-### `monitor_search`
+### `facebook_marketplace_monitor_search`
 
 Save a search as a monitor to track new listings over time.
 
@@ -107,7 +107,7 @@ Save a search as a monitor to track new listings over time.
 | `min_price` | number | no       | Min price            |
 | `max_price` | number | no       | Max price            |
 
-### `check_monitors`
+### `facebook_marketplace_check_monitors`
 
 Check monitors for new listings since last check.
 
@@ -115,28 +115,60 @@ Check monitors for new listings since last check.
 | -------------- | ------ | -------- | --------------------------------------- |
 | `monitor_name` | string | no       | Check specific monitor, or omit for all |
 
-### `list_monitors`
+### `facebook_marketplace_list_monitors`
 
 List all saved monitors.
 
-### `delete_monitor`
+### `facebook_marketplace_delete_monitor`
 
 Delete a saved monitor.
 
 ## Configuration
 
-| Env Variable            | Default   | Description                                                        |
-| ----------------------- | --------- | ------------------------------------------------------------------ |
-| `CHROME_PROFILE`        | `Default` | Chrome profile directory name                                      |
-| `FACEBOOK_SESSION_FILE` | unset     | Absolute path to a JSON cookie file; used before Chrome extraction |
+| Env Variable            | Default                   | Description                                                        |
+| ----------------------- | ------------------------- | ------------------------------------------------------------------ |
+| `CHROME_PROFILE`        | `Default`                 | Chrome profile directory name                                      |
+| `FACEBOOK_SESSION_FILE` | `.local/facebook-session.json` | Cookie snapshot path; used before Chrome extraction |
+| `MCP_ERROR_LOG_PATH`    | `.local/mcp-errors.jsonl` | Alternate path for sanitized failed-tool diagnostics               |
+
+### Failed-request diagnostics
+
+Every failed MCP tool call is appended as a JSON line to
+`.local/mcp-errors.jsonl`. The error returned by the tool includes a
+`diagnostic ID`; search the file for that ID to inspect the matching record.
+Set `MCP_ERROR_LOG_PATH` when the log should live elsewhere.
+
+Records include the timestamp, tool, bounded input summary, error type/message,
+and safe Facebook request metadata such as the operation, path, status, and
+GraphQL document ID. They never include cookies, authorization or CSRF values,
+page tokens, request bodies, raw headers, HTML, or response bodies. The server
+continues returning the original MCP tool error if diagnostic writing fails.
 
 ### Cookie file authentication
 
-If Keychain access is unavailable, create a local JSON file with cookies copied
-from Chrome's Facebook cookie storage. The file may be either a JSON array or
+On first start, the server extracts active Facebook cookies from Chrome and
+saves them to `.local/facebook-session.json`. Later starts use that snapshot
+and do not access Chrome or Keychain. Set `FACEBOOK_SESSION_FILE` to store the
+same private JSON snapshot elsewhere. The file may be either a JSON array or
 an object containing a `cookies` array. `c_user` and `xs` are required; `datr`,
 `fr`, and `sb` are recommended when present. Chrome-style fields such as
 `domain`, `path`, `expirationDate`, `secure`, and `httpOnly` are accepted.
+
+### Interactive login
+
+When the session must be refreshed, run:
+
+```bash
+npm run login
+```
+
+This opens a visible, dedicated Chrome profile at
+`.local/facebook-login-profile`. Complete Facebook login (including any
+checkpoint), return to Marketplace, and press Enter in the terminal. The
+command validates the Marketplace page and saves only normalized cookies to
+`FACEBOOK_SESSION_FILE` or `.local/facebook-session.json`; page tokens are not
+stored. It closes Chrome when it succeeds or fails, while retaining the private
+login profile for the next interactive refresh.
 
 ```json
 {
@@ -161,12 +193,12 @@ an object containing a `cookies` array. `c_user` and `xs` are required; `datr`,
 }
 ```
 
-Keep this file out of version control and restrict it to your account, for
-example `chmod 600 .local/facebook-session.json`. When the file is valid, the
-server does not access Chrome or Keychain. If the file cannot be read or does
-not contain an active Facebook session, it falls back to `CHROME_PROFILE`.
-Restart the MCP server after replacing the file; cookies and page tokens are
-kept in memory for the running process.
+The server writes snapshots atomically with owner-only directory and file
+permissions, and refuses to overwrite symbolic links. Keep the file out of
+version control. If it is missing, malformed, or expired, the server falls back
+to `CHROME_PROFILE` and replaces it with a fresh snapshot. Restart the MCP
+server after replacing the file manually; cookies and page tokens are kept in
+memory for the running process.
 
 ## Updating GraphQL Queries
 

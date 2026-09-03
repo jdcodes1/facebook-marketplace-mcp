@@ -1,53 +1,39 @@
-import { z } from "zod";
-import type { FacebookClient } from "../facebook/client.js";
+import type { z } from "zod";
+import { searchLocationsInput } from "../mcp/contracts.js";
+import { responseFor, takeWithinCharacterLimit } from "../mcp/response.js";
+import type { MarketplaceService } from "../mcp/types.js";
+import { toolErrorResponse } from "../utils/diagnostics.js";
 
-export const searchLocationSchema = {
-  query: z
-    .string()
-    .describe(
-      "Location search query (e.g. 'Dedham MA', 'Boston', 'Brooklyn NY')"
-    ),
-};
-
-export function createLocationHandler(client: FacebookClient) {
-  return async (args: { query: string }) => {
+export function createSearchLocationsHandler(service: MarketplaceService) {
+  return async (args: z.infer<typeof searchLocationsInput>) => {
     try {
-      const results = await client.searchLocation(args.query);
-
-      if (results.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `No locations found for "${args.query}". Try a city or town name with state abbreviation.`,
-            },
-          ],
-        };
-      }
-
-      const lines = results.map(
-        (r, i) =>
-          `${i + 1}. **${r.name}** — lat: ${r.latitude}, lng: ${r.longitude}`
+      const bounded = takeWithinCharacterLimit(
+        await service.searchLocation(args.query),
+        (location) => JSON.stringify(location),
       );
-
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Found ${results.length} location(s) for "${args.query}":\n\n${lines.join("\n")}\n\nUse these coordinates with search_listings.`,
-          },
-        ],
+      const output = {
+        query: args.query,
+        count: bounded.items.length,
+        locations: bounded.items,
+        truncated: bounded.truncated,
+        ...(bounded.truncated
+          ? {
+              truncation_message:
+                "Response truncated. Use a more specific location query.",
+            }
+          : {}),
       };
+      const markdown = bounded.items.length
+        ? `# Locations for "${args.query}"\n\n${bounded.items.map((location, index) => `${index + 1}. **${location.name}** — lat: ${location.latitude}, lng: ${location.longitude}`).join("\n")}`
+        : `No locations found for "${args.query}". Try a city, town, or ZIP code.`;
+      return responseFor(output, args.response_format, markdown);
     } catch (error) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Error searching locations: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-        isError: true,
-      };
+      return toolErrorResponse(
+        "facebook_marketplace_search_locations",
+        args,
+        error,
+        "Unable to search Marketplace locations",
+      );
     }
   };
 }
