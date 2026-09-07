@@ -28,7 +28,7 @@ import fs from "node:fs";
 
 const CHROME_USER_DATA = path.join(
   os.homedir(),
-  "Library/Application Support/Google/Chrome"
+  "Library/Application Support/Google/Chrome",
 );
 
 interface CapturedQuery {
@@ -100,7 +100,7 @@ async function main() {
   // Try to search
   try {
     const searchInput = page.locator(
-      'input[placeholder*="Search"], input[aria-label*="Search"]'
+      'input[placeholder*="Search"], input[aria-label*="Search"]',
     );
     if (await searchInput.isVisible({ timeout: 5000 })) {
       await searchInput.fill("laptop");
@@ -139,15 +139,12 @@ async function main() {
   const outputPath = path.join(
     import.meta.dirname ?? ".",
     "..",
-    "captured-queries.json"
+    "captured-queries.json",
   );
-  fs.writeFileSync(
-    outputPath,
-    JSON.stringify([...unique.values()], null, 2)
-  );
+  fs.writeFileSync(outputPath, JSON.stringify([...unique.values()], null, 2));
   console.log(`\nSaved to ${outputPath}`);
   console.log(
-    "\nUpdate src/facebook/queries.ts with the new doc_id values if they changed."
+    "\nUpdate src/facebook/queries.ts with the new doc_id values if they changed.",
   );
 }
 

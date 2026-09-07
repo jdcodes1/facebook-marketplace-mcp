@@ -1,29 +1,44 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { FacebookClient } from "./facebook/client.js";
-import { searchListingsSchema, createSearchHandler } from "./tools/search.js";
-import { getListingSchema, createListingHandler } from "./tools/listing.js";
+import { DEFAULT_FACEBOOK_SESSION_FILE } from "./facebook/auth.js";
 import {
-  searchLocationSchema,
-  createLocationHandler,
-} from "./tools/location.js";
-import {
-  monitorSearchSchema,
-  checkMonitorsSchema,
-  deleteMonitorSchema,
-  listMonitorsSchema,
-  createMonitorSearchHandler,
   createCheckMonitorsHandler,
+  createCreateMonitorHandler,
   createDeleteMonitorHandler,
   createListMonitorsHandler,
 } from "./tools/monitor.js";
+import {
+  checkMonitorsInput,
+  checkMonitorsOutput,
+  createMonitorInput,
+  createMonitorOutput,
+  deleteMonitorInput,
+  deleteMonitorOutput,
+  getListingInput,
+  listingOutput,
+  listMonitorsInput,
+  listMonitorsOutput,
+  locationsOutput,
+  searchListingsInput,
+  searchListingsOutput,
+  searchLocationsInput,
+} from "./mcp/contracts.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  createGetListingHandler,
+  createSearchListingsHandler,
+} from "./tools/listing.js";
+import { createSearchLocationsHandler } from "./tools/location.js";
+import { localMonitorStore } from "./mcp/monitor-store.js";
 
 const client = new FacebookClient({
   maxRequestsPerMinute: 3,
-  chromeProfile: process.env.CHROME_PROFILE ?? "Default",
+  sessionFile: process.env.FACEBOOK_SESSION_FILE ?? DEFAULT_FACEBOOK_SESSION_FILE,
 });
+
+const monitorStore = localMonitorStore;
 
 const server = new McpServer({
   name: "facebook-marketplace",
@@ -31,59 +46,135 @@ const server = new McpServer({
 });
 
 // Search listings
-server.tool(
-  "search_listings",
-  "Search Facebook Marketplace listings by query, location, and filters",
-  searchListingsSchema,
-  createSearchHandler(client)
+server.registerTool(
+  "facebook_marketplace_search_listings",
+  {
+    title: "Search Facebook Marketplace listings",
+    description:
+      "Search Marketplace listings by text, location, filters, and an optional continuation cursor.",
+    inputSchema: searchListingsInput,
+    outputSchema: searchListingsOutput,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  createSearchListingsHandler(client),
 );
 
 // Get listing details
-server.tool(
-  "get_listing",
-  "Get full details for a specific Facebook Marketplace listing",
-  getListingSchema,
-  createListingHandler(client)
+server.registerTool(
+  "facebook_marketplace_get_listing",
+  {
+    title: "Get a Facebook Marketplace listing",
+    description:
+      "Get details, seller information, and images for one Marketplace listing.",
+    inputSchema: getListingInput,
+    outputSchema: listingOutput,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  createGetListingHandler(client),
 );
 
 // Search for a location (get coordinates)
-server.tool(
-  "search_location",
-  "Look up a city/town name to get coordinates for use with search_listings",
-  searchLocationSchema,
-  createLocationHandler(client)
+server.registerTool(
+  "facebook_marketplace_search_locations",
+  {
+    title: "Search Marketplace locations",
+    description:
+      "Resolve a city, neighborhood, or ZIP code to coordinates for a Marketplace search.",
+    inputSchema: searchLocationsInput,
+    outputSchema: locationsOutput,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  },
+  createSearchLocationsHandler(client),
 );
 
 // Save a search monitor
-server.tool(
-  "monitor_search",
-  "Save a search query as a monitor to track new listings over time",
-  monitorSearchSchema,
-  createMonitorSearchHandler()
+server.registerTool(
+  "facebook_marketplace_create_monitor",
+  {
+    title: "Create a Marketplace monitor",
+    description:
+      "Persist a Marketplace search locally and use it to detect new listings later.",
+    inputSchema: createMonitorInput,
+    outputSchema: createMonitorOutput,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  },
+  createCreateMonitorHandler(monitorStore),
 );
 
 // Check monitors for new listings
-server.tool(
-  "check_monitors",
-  "Check saved monitors for new listings since last check",
-  checkMonitorsSchema,
-  createCheckMonitorsHandler(client)
+server.registerTool(
+  "facebook_marketplace_check_monitors",
+  {
+    title: "Check Marketplace monitors",
+    description:
+      "Search saved monitors and record newly observed listing IDs locally.",
+    inputSchema: checkMonitorsInput,
+    outputSchema: checkMonitorsOutput,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  },
+  createCheckMonitorsHandler(client, monitorStore),
 );
 
 // Delete a monitor
-server.tool(
-  "delete_monitor",
-  "Delete a saved search monitor",
-  deleteMonitorSchema,
-  createDeleteMonitorHandler()
+server.registerTool(
+  "facebook_marketplace_delete_monitor",
+  {
+    title: "Delete a Marketplace monitor",
+    description: "Permanently delete one locally saved Marketplace monitor.",
+    inputSchema: deleteMonitorInput,
+    outputSchema: deleteMonitorOutput,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  createDeleteMonitorHandler(monitorStore),
 );
 
 // List all monitors
-server.tool(
-  "list_monitors",
-  "List all saved search monitors",
-  listMonitorsSchema,
-  createListMonitorsHandler()
+server.registerTool(
+  "facebook_marketplace_list_monitors",
+  {
+    title: "List Marketplace monitors",
+    description:
+      "List locally saved Marketplace monitors and their check state.",
+    inputSchema: listMonitorsInput,
+    outputSchema: listMonitorsOutput,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  },
+  createListMonitorsHandler(monitorStore),
 );
 
 // Start the server
