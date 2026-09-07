@@ -1,5 +1,10 @@
-import { z } from "zod";
+// Zod 4 keeps refinements on object schemas so the MCP SDK can publish their fields.
+import { z } from "zod/v4";
 import { DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT } from "./constants.js";
+
+// Keep nullable strings constrained for JSON Schema converters that otherwise
+// collapse nullable strings into an array-valued `type`.
+const nullableStringSchema = z.string().min(0).nullable();
 
 export const responseFormatSchema = z
   .enum(["markdown", "json"])
@@ -31,7 +36,7 @@ const monitorSchema = z.object({
   max_price: z.number().optional(),
   category: z.string().optional(),
   created_at: z.string(),
-  last_checked: z.string().nullable(),
+  last_checked: nullableStringSchema,
   seen_count: z.number().int().nonnegative(),
 });
 
@@ -204,7 +209,7 @@ export const searchListingsOutput = z.object({
   count: z.number().int().nonnegative(),
   listings: z.array(listingSchema),
   has_more: z.boolean(),
-  next_cursor: z.string().nullable(),
+  next_cursor: nullableStringSchema,
   ...truncationFields,
 });
 export const listingOutput = z.object({
@@ -212,7 +217,7 @@ export const listingOutput = z.object({
     description: z.string(),
     images: z.array(z.string()),
     condition: z.string(),
-    seller: z.object({ name: z.string(), profile_url: z.string().nullable() }),
+    seller: z.object({ name: z.string(), profile_url: nullableStringSchema }),
   }),
   ...truncationFields,
 });

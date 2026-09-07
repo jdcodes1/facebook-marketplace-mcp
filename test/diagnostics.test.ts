@@ -9,7 +9,7 @@ import {
   toolErrorResponse,
   type ToolFailureRecord,
 } from "../src/utils/diagnostics.js";
-import { createSearchListingsHandler } from "../src/mcp/tools/listings.js";
+import { createSearchListingsHandler } from "../src/tools/listing.js";
 import type { MarketplaceService } from "../src/mcp/types.js";
 
 async function withDiagnosticFile(run: (logPath: string) => Promise<void>) {

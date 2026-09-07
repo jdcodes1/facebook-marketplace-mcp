@@ -38,7 +38,6 @@ Or add to your Claude Code config manually:
       "command": "node",
       "args": ["/path/to/facebook-marketplace-mcp/dist/index.js"],
       "env": {
-        "CHROME_PROFILE": "Default",
         "FACEBOOK_SESSION_FILE": "/absolute/path/to/facebook-marketplace-mcp/.local/facebook-session.json"
       }
     }
@@ -54,7 +53,6 @@ command = "node"
 args = ["/path/to/facebook-marketplace-mcp/dist/index.js"]
 
 [mcp_servers.facebook-marketplace.env]
-"CHROME_PROFILE" = "Default"
 "FACEBOOK_SESSION_FILE" = "/absolute/path/to/facebook-marketplace-mcp/.local/facebook-session.json"
 
 ```
@@ -128,13 +126,12 @@ Delete a saved monitor.
 
 ## Configuration
 
-| Env Variable            | Default                        | Description                                          |
-| ----------------------- | ------------------------------ | ---------------------------------------------------- |
-| `CHROME_PROFILE`        | `Default`                      | Chrome profile directory name                        |
-| `FACEBOOK_SESSION_FILE` | `.local/facebook-session.json` | Cookie snapshot path; used before Chrome extraction  |
-| `MCP_ERROR_LOG_PATH`    | `.local/mcp-errors.jsonl`      | Alternate path for sanitized failed-tool diagnostics |
-| `MCP_CAPTURE_LISTING_HTML` | unset | Set to `1` to retain exact direct listing-page HTML locally |
-| `MCP_LISTING_CAPTURE_DIR` | `.local/listing-page-captures` | Alternate directory for opted-in raw HTML captures |
+| Env Variable               | Default                        | Description                                                 |
+| -------------------------- | ------------------------------ | ----------------------------------------------------------- |
+| `FACEBOOK_SESSION_FILE`    | `.local/facebook-session.json` | Login session snapshot path                                 |
+| `MCP_ERROR_LOG_PATH`       | `.local/mcp-errors.jsonl`      | Alternate path for sanitized failed-tool diagnostics        |
+| `MCP_CAPTURE_LISTING_HTML` | unset                          | Set to `1` to retain exact direct listing-page HTML locally |
+| `MCP_LISTING_CAPTURE_DIR`  | `.local/listing-page-captures` | Alternate directory for opted-in raw HTML captures          |
 
 ### Failed-request diagnostics
 
@@ -165,13 +162,10 @@ is reported only on stderr and does not alter the request result.
 
 ### Cookie file authentication
 
-On first start, the server extracts active Facebook cookies from Chrome and
-saves them to `.local/facebook-session.json`. Later starts use that snapshot
-and do not access Chrome or Keychain. Set `FACEBOOK_SESSION_FILE` to store the
-same private JSON snapshot elsewhere. The file may be either a JSON array or
-an object containing a `cookies` array. `c_user` and `xs` are required; `datr`,
-`fr`, and `sb` are recommended when present. Chrome-style fields such as
-`domain`, `path`, `expirationDate`, `secure`, and `httpOnly` are accepted.
+Run `npm run login` before starting the server. It saves Facebook cookies and
+Chrome's user agent to `.local/facebook-session.json`. Set `FACEBOOK_SESSION_FILE`
+to use another path. The server requires this login-generated session format,
+including its browser user agent; cookie-only exports are not supported.
 
 ### Interactive login
 
@@ -184,40 +178,15 @@ npm run login
 This opens a visible, dedicated Chrome profile at
 `.local/facebook-login-profile`. Complete Facebook login (including any
 checkpoint), return to Marketplace, and press Enter in the terminal. The
-command validates the Marketplace page and saves only normalized cookies to
+command validates the Marketplace page and saves normalized cookies and the browser user agent to
 `FACEBOOK_SESSION_FILE` or `.local/facebook-session.json`; page tokens are not
 stored. It closes Chrome when it succeeds or fails, while retaining the private
 login profile for the next interactive refresh.
 
-```json
-{
-  "cookies": [
-    {
-      "name": "c_user",
-      "value": "YOUR_USER_ID",
-      "domain": ".facebook.com",
-      "path": "/",
-      "secure": true,
-      "httpOnly": true
-    },
-    {
-      "name": "xs",
-      "value": "YOUR_SESSION_VALUE",
-      "domain": ".facebook.com",
-      "path": "/",
-      "secure": true,
-      "httpOnly": true
-    }
-  ]
-}
-```
-
 The server writes snapshots atomically with owner-only directory and file
 permissions, and refuses to overwrite symbolic links. Keep the file out of
-version control. If it is missing, malformed, or expired, the server falls back
-to `CHROME_PROFILE` and replaces it with a fresh snapshot. Restart the MCP
-server after replacing the file manually; cookies and page tokens are kept in
-memory for the running process.
+version control. If it is missing, malformed, or expired, run `npm run login` again. Restart the
+MCP server afterward to load the new cookies and browser user agent.
 
 ## Updating GraphQL Queries
 

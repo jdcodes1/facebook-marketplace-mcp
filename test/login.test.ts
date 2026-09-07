@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { loadFacebookCookiesFromFile } from "../src/facebook/auth.js";
+import { loadFacebookCookiesFromFile, loadFacebookSessionFromFile } from "../src/facebook/auth.js";
 import {
   normalizeFacebookLoginCookies,
   runFacebookLogin,
@@ -58,6 +58,7 @@ test("saves cookies only after a healthy Marketplace validation", async () => {
   const sessionFile = join(directory, "session.json");
   let closeCalls = 0;
   const page = {
+    async evaluate() { return "TestBrowser/150.0"; },
     async goto() {
       return {
         ok: () => true,
@@ -82,6 +83,7 @@ test("saves cookies only after a healthy Marketplace validation", async () => {
       writeOutput: () => undefined,
     });
 
+    assert.equal(loadFacebookSessionFromFile(sessionFile).userAgent, "TestBrowser/150.0");
     assert.equal(closeCalls, 1);
     assert.deepEqual(
       loadFacebookCookiesFromFile(sessionFile).map((cookie) => cookie.name),
@@ -98,6 +100,7 @@ test("does not save cookies after an unhealthy Marketplace response", async () =
   const sessionFile = join(directory, "session.json");
   let closeCalls = 0;
   const page = {
+    async evaluate() { return "TestBrowser/150.0"; },
     async goto() {
       return {
         ok: () => true,

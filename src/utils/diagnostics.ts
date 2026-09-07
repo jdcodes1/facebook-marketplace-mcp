@@ -104,6 +104,31 @@ function diagnosticLogPath(): string {
   return resolve(process.env.MCP_ERROR_LOG_PATH ?? ".local/mcp-errors.jsonl");
 }
 
+export async function recordGraphqlWarning(
+  request: FacebookRequestContext,
+  summary: { errorCount: number; codes: number[] },
+): Promise<void> {
+  // Only accept a summary: provider messages and raw payloads must not be logged.
+  const record = {
+    timestamp: new Date().toISOString(),
+    correlationId: randomUUID(),
+    level: "warning",
+    event: "graphql-provider-errors",
+    request,
+    errorCount: summary.errorCount,
+    codes: [...new Set(summary.codes.filter(Number.isFinite))],
+  };
+  try {
+    const logPath = diagnosticLogPath();
+    await mkdir(dirname(logPath), { recursive: true });
+    await appendFile(logPath, `${JSON.stringify(record)}\n`, "utf8");
+  } catch {
+    process.stderr.write(
+      "[facebook-marketplace-mcp] could not record GraphQL warning\n",
+    );
+  }
+}
+
 export async function recordToolFailure(
   tool: string,
   input: unknown,

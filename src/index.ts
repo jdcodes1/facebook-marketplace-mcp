@@ -35,7 +35,6 @@ import { localMonitorStore } from "./mcp/monitor-store.js";
 
 const client = new FacebookClient({
   maxRequestsPerMinute: 3,
-  chromeProfile: process.env.CHROME_PROFILE ?? "Profile 1",
   sessionFile: process.env.FACEBOOK_SESSION_FILE ?? DEFAULT_FACEBOOK_SESSION_FILE,
 });
 

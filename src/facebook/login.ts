@@ -33,6 +33,7 @@ interface LoginResponse {
 }
 
 interface LoginPage {
+  evaluate(pageFunction: () => string): Promise<string>;
   goto(
     url: string,
     options: { waitUntil: "domcontentloaded"; timeout: number },
@@ -162,7 +163,8 @@ export async function runFacebookLogin(
     const cookies = normalizeFacebookLoginCookies(
       await context.cookies([MARKETPLACE_URL]),
     );
-    saveFacebookCookiesToFile(sessionFile, cookies);
+    const userAgent = await page.evaluate(() => navigator.userAgent);
+    saveFacebookCookiesToFile(sessionFile, cookies, userAgent);
     writeOutput(`Saved Facebook session cookies to ${sessionFile}.`);
   } finally {
     await context?.close().catch(() => undefined);

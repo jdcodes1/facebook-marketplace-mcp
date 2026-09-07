@@ -11,7 +11,8 @@ function isRecord(value: unknown): value is JsonRecord {
 }
 
 function textValue(value: unknown): string {
-  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "string" || typeof value === "number")
+    return String(value);
   if (isRecord(value) && typeof value.text === "string") return value.text;
   return "";
 }
@@ -20,12 +21,13 @@ function findListingConnection(root: unknown): JsonRecord | null {
   const seen = new Set<object>();
   const queue: unknown[] = [root];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!isRecord(current) || seen.has(current)) continue;
+  for (let index = 0; index < queue.length; index++) {
+    const current = queue[index];
+    if ((!isRecord(current) && !Array.isArray(current)) || seen.has(current))
+      continue;
     seen.add(current);
 
-    if (Array.isArray(current.edges)) {
+    if (isRecord(current) && Array.isArray(current.edges)) {
       const hasListing = current.edges.some((edge) => {
         if (!isRecord(edge) || !isRecord(edge.node)) return false;
         return (
@@ -36,61 +38,95 @@ function findListingConnection(root: unknown): JsonRecord | null {
       if (hasListing) return current;
     }
 
-    queue.push(...Object.values(current));
+    for (const value of Object.values(current)) queue.push(value);
   }
 
   return null;
 }
 
 export function parseSearchResponse(data: unknown): SearchResult {
-  try {
-    const root = data as any;
-    const feedUnits =
-      root?.data?.marketplace_search?.feed_units ??
-      findListingConnection(root?.data);
-
-    if (!feedUnits) {
-      return { listings: [], hasNextPage: false, endCursor: null };
-    }
-
-    const edges = feedUnits.edges ?? [];
-    const pageInfo = feedUnits.page_info ?? {};
-
-    const listings: MarketplaceListing[] = edges
-      .map((edge: any) => {
-        const listing = edge?.node?.listing ?? edge?.node;
-        if (!listing?.marketplace_listing_title && !listing?.id) return null;
-
-        return {
-          id: listing.id ?? "",
-          title: listing.marketplace_listing_title ?? "",
-          price:
-            listing.listing_price?.formatted_amount ??
-            listing.listing_price?.amount ??
-            "N/A",
-          location:
-            listing.location?.reverse_geocode?.city_page?.display_name ??
-            listing.location?.reverse_geocode?.city ??
-            "Unknown",
-          imageUrl: listing.primary_listing_photo?.image?.uri ?? "",
-          sellerName: listing.marketplace_listing_seller?.name ?? "Unknown",
-          postedDate: listing.creation_time
-            ? new Date(listing.creation_time * 1000).toISOString()
-            : "",
-          url: `https://www.facebook.com/marketplace/item/${listing.id}/`,
-          isPending: listing.is_pending ?? false,
-        };
-      })
-      .filter(Boolean) as MarketplaceListing[];
-
-    return {
-      listings,
-      hasNextPage: pageInfo.has_next_page ?? false,
-      endCursor: pageInfo.end_cursor ?? null,
-    };
-  } catch {
-    return { listings: [], hasNextPage: false, endCursor: null };
+  if (!isRecord(data) || !isRecord(data.data)) {
+    throw new Error("Marketplace search response is missing data");
   }
+  const search = data.data.marketplace_search;
+  const feedUnits =
+    (isRecord(search) ? search.feed_units : undefined) ??
+    findListingConnection(data.data);
+
+  if (!isRecord(feedUnits)) {
+    throw new Error(
+      "Marketplace search response is missing a listing connection",
+    );
+  }
+  if (!Array.isArray(feedUnits.edges)) {
+    throw new Error("Marketplace listing connection has invalid edges");
+  }
+
+  const listings = feedUnits.edges
+    .map(parseSearchListing)
+    .filter((listing): listing is MarketplaceListing => listing !== null);
+  if (feedUnits.edges.length > 0 && listings.length === 0) {
+    throw new Error(
+      "Marketplace listing connection contains no usable listings",
+    );
+  }
+
+  const pageInfo = isRecord(feedUnits.page_info) ? feedUnits.page_info : {};
+  return {
+    listings,
+    hasNextPage: pageInfo.has_next_page === true,
+    endCursor:
+      typeof pageInfo.end_cursor === "string" ? pageInfo.end_cursor : null,
+  };
+}
+
+function parseSearchListing(edge: unknown): MarketplaceListing | null {
+  if (!isRecord(edge) || !isRecord(edge.node)) return null;
+  const listing = edge.node.listing ?? edge.node;
+  if (!isRecord(listing)) return null;
+  const id =
+    typeof listing.id === "string"
+      ? listing.id
+      : typeof listing.id === "number" && Number.isFinite(listing.id)
+        ? String(listing.id)
+        : "";
+  if (!id.trim()) return null;
+
+  const price = isRecord(listing.listing_price) ? listing.listing_price : {};
+  const location = isRecord(listing.location) ? listing.location : {};
+  const geocode = isRecord(location.reverse_geocode)
+    ? location.reverse_geocode
+    : {};
+  const cityPage = isRecord(geocode.city_page) ? geocode.city_page : {};
+  const photo = isRecord(listing.primary_listing_photo)
+    ? listing.primary_listing_photo
+    : {};
+  const image = isRecord(photo.image) ? photo.image : {};
+  const seller = isRecord(listing.marketplace_listing_seller)
+    ? listing.marketplace_listing_seller
+    : {};
+  const timestamp = listing.creation_time;
+  const seconds =
+    typeof timestamp === "number"
+      ? timestamp
+      : typeof timestamp === "string" && timestamp.trim() !== ""
+        ? Number(timestamp)
+        : NaN;
+  const date = new Date(seconds * 1000);
+
+  return {
+    id,
+    title: textValue(listing.marketplace_listing_title),
+    price:
+      textValue(price.formatted_amount) || textValue(price.amount) || "N/A",
+    location:
+      textValue(cityPage.display_name) || textValue(geocode.city) || "Unknown",
+    imageUrl: textValue(image.uri),
+    sellerName: textValue(seller.name) || "Unknown",
+    postedDate: Number.isFinite(date.getTime()) ? date.toISOString() : "",
+    url: `https://www.facebook.com/marketplace/item/${id}/`,
+    isPending: listing.is_pending === true,
+  };
 }
 
 function isListingNode(value: JsonRecord): boolean {
@@ -120,9 +156,12 @@ function mergeMissing(target: JsonRecord, source: JsonRecord): void {
   }
 }
 
-function findListingNodeInPage(html: string, listingId: string): JsonRecord | null {
+function findListingNodeInPage(
+  html: string,
+  listingId: string,
+): JsonRecord | null {
   const blocks = html.matchAll(
-    /<script[^>]+type=["']application\/json["'][^>]*>(.*?)<\/script>/gis
+    /<script[^>]+type=["']application\/json["'][^>]*>(.*?)<\/script>/gis,
   );
   const candidates: JsonRecord[] = [];
   const listingIds = new Set([listingId]);
@@ -139,7 +178,8 @@ function findListingNodeInPage(html: string, listingId: string): JsonRecord | nu
     const queue: unknown[] = [payload];
     for (let index = 0; index < queue.length; index++) {
       const current = queue[index];
-      if ((!isRecord(current) && !Array.isArray(current)) || seen.has(current)) continue;
+      if ((!isRecord(current) && !Array.isArray(current)) || seen.has(current))
+        continue;
       seen.add(current);
 
       if (isRecord(current) && isListingNode(current)) {
@@ -171,7 +211,7 @@ function findListingNodeInPage(html: string, listingId: string): JsonRecord | nu
 
 export function parseListingDetailFromPage(
   html: string,
-  listingId: string
+  listingId: string,
 ): MarketplaceListingDetail {
   // Facebook embeds listing data as JSON in script tags.
   // Look for structured data or relay-style data payloads.
@@ -197,7 +237,9 @@ export function parseListingDetailFromPage(
   const listing = findListingNodeInPage(html, listingId);
   if (listing) {
     detail.title = textValue(listing.marketplace_listing_title);
-    const price = isRecord(listing.listing_price) ? listing.listing_price : undefined;
+    const price = isRecord(listing.listing_price)
+      ? listing.listing_price
+      : undefined;
     detail.price =
       textValue(price?.formatted_amount_zeros_stripped) ||
       textValue(price?.formatted_amount) ||
@@ -210,7 +252,11 @@ export function parseListingDetailFromPage(
       ? reverseGeocode.city_page
       : undefined;
     detail.location =
-      textValue(isRecord(listing.location_text) ? listing.location_text.text : undefined) ||
+      textValue(
+        isRecord(listing.location_text)
+          ? listing.location_text.text
+          : undefined,
+      ) ||
       textValue(cityPage?.display_name) ||
       textValue(reverseGeocode?.city);
     detail.description = textValue(
@@ -218,7 +264,7 @@ export function parseListingDetailFromPage(
         ? listing.redacted_description.text
         : isRecord(listing.description)
           ? listing.description.text
-          : undefined
+          : undefined,
     );
     const seller = isRecord(listing.marketplace_listing_seller)
       ? listing.marketplace_listing_seller
@@ -226,11 +272,14 @@ export function parseListingDetailFromPage(
     detail.sellerName = textValue(seller?.name);
     detail.seller.name = detail.sellerName;
     const sellerId = textValue(seller?.id);
-    if (sellerId) detail.seller.profileUrl = `https://www.facebook.com/${sellerId}`;
-    detail.condition = textValue(listing.condition) || textValue(listing.condition_text);
+    if (sellerId)
+      detail.seller.profileUrl = `https://www.facebook.com/${sellerId}`;
+    detail.condition =
+      textValue(listing.condition) || textValue(listing.condition_text);
     if (!detail.condition && Array.isArray(listing.attribute_data)) {
       const condition = listing.attribute_data.find(
-        (attribute) => isRecord(attribute) && attribute.attribute_name === "Condition"
+        (attribute) =>
+          isRecord(attribute) && attribute.attribute_name === "Condition",
       );
       if (isRecord(condition)) detail.condition = textValue(condition.label);
     }
@@ -241,7 +290,9 @@ export function parseListingDetailFromPage(
     const primaryPhoto = isRecord(listing.primary_listing_photo)
       ? listing.primary_listing_photo
       : undefined;
-    const primaryImage = isRecord(primaryPhoto?.image) ? primaryPhoto.image : undefined;
+    const primaryImage = isRecord(primaryPhoto?.image)
+      ? primaryPhoto.image
+      : undefined;
     const primaryUri = textValue(primaryImage?.uri);
     if (primaryUri) {
       detail.imageUrl = primaryUri;
@@ -249,7 +300,8 @@ export function parseListingDetailFromPage(
     }
     if (Array.isArray(listing.listing_photos)) {
       for (const photo of listing.listing_photos) {
-        const image = isRecord(photo) && isRecord(photo.image) ? photo.image : undefined;
+        const image =
+          isRecord(photo) && isRecord(photo.image) ? photo.image : undefined;
         const uri = textValue(image?.uri);
         if (uri && !detail.images.includes(uri)) detail.images.push(uri);
       }
@@ -260,17 +312,19 @@ export function parseListingDetailFromPage(
   // Open Graph metadata belongs to the current page and is a safe fallback for
   // title, description, and hero-image fields when Relay markup changes.
   const titleMatch = html.match(
-    /<meta\s+property="og:title"\s+content="([^"]*)"/
+    /<meta\s+property="og:title"\s+content="([^"]*)"/,
   );
-  if (!detail.title && titleMatch) detail.title = decodeHtmlEntities(titleMatch[1]);
+  if (!detail.title && titleMatch)
+    detail.title = decodeHtmlEntities(titleMatch[1]);
 
   const descMatch = html.match(
-    /<meta\s+property="og:description"\s+content="([^"]*)"/
+    /<meta\s+property="og:description"\s+content="([^"]*)"/,
   );
-  if (!detail.description && descMatch) detail.description = decodeHtmlEntities(descMatch[1]);
+  if (!detail.description && descMatch)
+    detail.description = decodeHtmlEntities(descMatch[1]);
 
   const imageMatch = html.match(
-    /<meta\s+property="og:image"\s+content="([^"]*)"/
+    /<meta\s+property="og:image"\s+content="([^"]*)"/,
   );
   if (!detail.imageUrl && imageMatch) {
     detail.imageUrl = decodeHtmlEntities(imageMatch[1]);

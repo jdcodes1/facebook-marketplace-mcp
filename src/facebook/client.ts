@@ -7,7 +7,7 @@ import type {
 import {
   cookiesToHeader,
   getCookieValue,
-  loadFacebookCookies,
+  loadFacebookSession,
 } from "./auth.js";
 import {
   MARKETPLACE_SEARCH_DOC_ID,
@@ -21,22 +21,50 @@ import { captureListingPageHtml } from "./raw-capture.js";
 import { RateLimiter } from "../utils/rate-limit.js";
 import {
   MarketplaceRequestError,
+  recordGraphqlWarning,
   type FacebookRequestContext,
 } from "../utils/diagnostics.js";
 
 const GRAPHQL_URL = "https://www.facebook.com/api/graphql/";
 const MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
-
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function graphqlErrorSummary(response: Record<string, unknown>) {
+  const errors = Array.isArray(response.errors)
+    ? [...response.errors]
+    : response.errors != null
+      ? [response.errors]
+      : [];
+  if (
+    response.error != null &&
+    response.error !== false &&
+    response.error !== 0
+  ) {
+    errors.push(response.error);
+  }
+  const codes: number[] = [];
+  for (const error of errors) {
+    const candidates = isRecord(error)
+      ? [
+          error.code,
+          error.error_code,
+          isRecord(error.extensions) ? error.extensions.code : undefined,
+        ]
+      : [error];
+    for (const code of candidates) {
+      if (typeof code === "number" && Number.isFinite(code)) codes.push(code);
+    }
+  }
+  return { errorCount: errors.length, codes };
+}
+
 const BROWSER_HEADERS: Record<string, string> = {
-  "User-Agent": USER_AGENT,
   "Accept-Language": "en-US,en;q=0.9",
-  "sec-ch-ua":
-    '"Chromium";v="146", "Google Chrome";v="146", "Not?A_Brand";v="99"',
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"macOS"',
   "sec-fetch-dest": "document",
   "sec-fetch-mode": "navigate",
   "sec-fetch-site": "none",
@@ -48,18 +76,16 @@ export class FacebookClient {
   private session: FacebookSession | null = null;
   private rateLimiter: RateLimiter;
   private reqCounter = 0;
-  private chromeProfile: string;
   private sessionFile?: string;
+  private userAgent = "";
 
   constructor(
     options: {
       maxRequestsPerMinute?: number;
-      chromeProfile?: string;
       sessionFile?: string;
     } = {},
   ) {
     this.rateLimiter = new RateLimiter(options.maxRequestsPerMinute ?? 3);
-    this.chromeProfile = options.chromeProfile ?? "Default";
     this.sessionFile = options.sessionFile;
   }
 
@@ -87,9 +113,8 @@ export class FacebookClient {
   }
 
   async initSession(): Promise<FacebookSession> {
-    const cookies = loadFacebookCookies({
+    const { cookies, userAgent } = loadFacebookSession({
       sessionFile: this.sessionFile,
-      chromeProfile: this.chromeProfile,
     });
 
     if (cookies.length === 0) {
@@ -105,6 +130,7 @@ export class FacebookClient {
       );
     }
 
+    this.userAgent = userAgent ?? USER_AGENT;
     const cookieHeader = cookiesToHeader(cookies);
 
     // Fetch marketplace page to extract tokens
@@ -138,6 +164,7 @@ export class FacebookClient {
       {
         headers: {
           ...BROWSER_HEADERS,
+          "User-Agent": this.userAgent,
           Cookie: cookieHeader,
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -223,6 +250,7 @@ export class FacebookClient {
         method: "POST",
         headers: {
           ...BROWSER_HEADERS,
+          "User-Agent": this.userAgent,
           Cookie: session.cookieHeader,
           "Content-Type": "application/x-www-form-urlencoded",
           Accept: "*/*",
@@ -257,22 +285,41 @@ export class FacebookClient {
       );
     }
 
-    let text = await res.text();
-
-    // Strip Facebook's anti-JSONP prefix
-    const jsonStart = text.indexOf("{");
-    if (jsonStart > 0) {
-      text = text.slice(jsonStart);
-    }
-
+    const text = await res.text();
+    const context = {
+      ...request,
+      status: res.status,
+      responseBytes: Buffer.byteLength(text, "utf8"),
+    };
+    let data: unknown;
     try {
-      return JSON.parse(text);
+      // Strip only Facebook's anti-JSONP prefix, not arbitrary non-JSON content.
+      data = JSON.parse(text.replace(/^\s*for\s*\(;;\);\s*/, ""));
     } catch {
-      throw new MarketplaceRequestError("Failed to parse GraphQL response", {
-        ...request,
-        responseBytes: text.length,
-      });
+      throw new MarketplaceRequestError(
+        "Failed to parse GraphQL response",
+        context,
+      );
     }
+    if (!isRecord(data)) {
+      throw new MarketplaceRequestError(
+        "Invalid GraphQL response envelope",
+        context,
+      );
+    }
+    const summary = graphqlErrorSummary(data);
+    if (summary.errorCount > 0) {
+      await recordGraphqlWarning(context, summary);
+    }
+    if (!isRecord(data.data)) {
+      throw new MarketplaceRequestError(
+        summary.errorCount > 0
+          ? "Facebook returned GraphQL errors without usable data"
+          : "GraphQL response is missing usable data",
+        context,
+      );
+    }
+    return data;
   }
 
   async searchListings(params: SearchParams): Promise<SearchResult> {
@@ -281,7 +328,20 @@ export class FacebookClient {
       MARKETPLACE_SEARCH_DOC_ID,
       variables,
     );
-    return parseSearchResponse(data);
+    try {
+      return parseSearchResponse(data);
+    } catch (error) {
+      throw new MarketplaceRequestError(
+        "Failed to parse Marketplace search response",
+        {
+          operation: "graphql",
+          method: "POST",
+          path: "/api/graphql/",
+          docId: MARKETPLACE_SEARCH_DOC_ID,
+        },
+        { cause: error },
+      );
+    }
   }
 
   async getListingDetail(listingId: string): Promise<MarketplaceListingDetail> {
@@ -309,6 +369,7 @@ export class FacebookClient {
       {
         headers: {
           ...BROWSER_HEADERS,
+          "User-Agent": this.userAgent,
           Cookie: session.cookieHeader,
           Accept:
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",

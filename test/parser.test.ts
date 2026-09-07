@@ -87,6 +87,96 @@ test("parses a Marketplace feed when Facebook moves the listing connection", () 
   });
 });
 
+function searchPage(edges: unknown, pageInfo: unknown = {}) {
+  return { data: { marketplace_search: { feed_units: { edges, page_info: pageInfo } } } };
+}
+
+test("distinguishes a valid empty search from missing or malformed data", () => {
+  assert.deepEqual(parseSearchResponse(searchPage([])), {
+    listings: [], hasNextPage: false, endCursor: null,
+  });
+  for (const response of [
+    null, [], {}, { data: null }, { data: [] }, { data: {} },
+    { data: { marketplace_search: { feed_units: {} } } },
+    { data: { marketplace_search: { feed_units: "invalid" } } },
+    searchPage(undefined), searchPage(null), searchPage({}), searchPage("invalid"),
+  ]) {
+    assert.throws(() => parseSearchResponse(response), /Marketplace/);
+  }
+});
+
+test("finds listing connections inside nested arrays and ignores unrelated connections", () => {
+  const connection = {
+    edges: [{ node: { listing: { id: "nested", marketplace_listing_title: "Desk" } } }],
+    page_info: { has_next_page: true, end_cursor: "cursor" },
+  };
+  const result = parseSearchResponse({ data: {
+    unrelated: { edges: [], page_info: {} },
+    other: { edges: [{ node: { id: "seller" } }] },
+    wrappers: [[null, "ignore", { payload: [connection] }]],
+  } });
+  assert.deepEqual(result.listings.map((listing) => listing.id), ["nested"]);
+  assert.equal(result.hasNextPage, true);
+  assert.equal(result.endCursor, "cursor");
+  assert.throws(() => parseSearchResponse({ data: { unrelated: { edges: [] } } }), /missing a listing connection/);
+});
+
+test("prefers the canonical connection even when it is empty", () => {
+  const response = searchPage([]);
+  Object.assign(response.data, {
+    fallback: { edges: [{ node: { id: "other", marketplace_listing_title: "Other" } }] },
+  });
+  assert.deepEqual(parseSearchResponse(response).listings, []);
+  response.data.marketplace_search.feed_units.edges = {};
+  assert.throws(() => parseSearchResponse(response), /invalid edges/);
+});
+
+test("fallback traversal terminates for cyclic objects and arrays", () => {
+  const values: unknown[] = [];
+  const data = { values };
+  values.push(data, values);
+  assert.throws(() => parseSearchResponse({ data }), /missing a listing connection/);
+  values.push({ edges: [{ node: { id: "found", marketplace_listing_title: "Desk" } }] });
+  assert.equal(parseSearchResponse({ data }).listings[0].id, "found");
+});
+
+test("keeps listings with invalid dates and preserves siblings and pagination", () => {
+  const invalidDates = ["invalid", "", null, undefined, {}, true, NaN, Infinity, 1e20];
+  const edges = invalidDates.map((creation_time, index) => ({ node: {
+    id: `invalid-date-${index}`, marketplace_listing_title: "Desk", creation_time,
+  } }));
+  const result = parseSearchResponse(searchPage([
+    ...edges,
+    { node: { listing: { id: "valid", creation_time: 1700000000 } } },
+    { node: { id: "epoch", creation_time: 0 } },
+    { node: { id: "numeric-string", creation_time: "1700000000" } },
+  ], { has_next_page: true, end_cursor: "next" }));
+  assert.equal(result.listings.length, invalidDates.length + 3);
+  assert.ok(result.listings.slice(0, invalidDates.length).every((listing) => listing.postedDate === ""));
+  assert.equal(result.listings[invalidDates.length].postedDate, "2023-11-14T22:13:20.000Z");
+  assert.equal(result.listings[invalidDates.length + 1].postedDate, "1970-01-01T00:00:00.000Z");
+  assert.equal(result.listings.at(-1)?.postedDate, "2023-11-14T22:13:20.000Z");
+  assert.equal(result.hasNextPage, true);
+  assert.equal(result.endCursor, "next");
+});
+
+test("skips malformed entries but rejects nonempty pages without usable listings", () => {
+  const malformed = [null, [], {}, { node: null }, { node: [] },
+    { node: { listing: "invalid" } }, { node: { id: {} } },
+    { node: { marketplace_listing_title: "Missing ID" } }];
+  assert.throws(() => parseSearchResponse(searchPage(malformed)), /no usable listings/);
+  const result = parseSearchResponse(searchPage([
+    ...malformed,
+    { node: { id: "good", marketplace_listing_title: "Desk" } },
+    { node: { listing: { id: 42, listing_price: { amount: 0 },
+      location: [], primary_listing_photo: "invalid", is_pending: "invalid" } } },
+  ], { has_next_page: true, end_cursor: "next" }));
+  assert.deepEqual(result.listings.map((listing) => listing.id), ["good", "42"]);
+  assert.equal(result.listings[1].price, "0");
+  assert.equal(result.listings[1].isPending, false);
+  assert.equal(result.endCursor, "next");
+});
+
 test("uses only the requested listing when page data includes related items", () => {
   const related = {
     id: "related-id",

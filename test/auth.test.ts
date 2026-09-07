@@ -49,61 +49,11 @@ const validCookies = [
   },
 ];
 
-test("loads a Chrome-style JSON cookie file without invoking Chrome", () => {
-  withSessionFile(JSON.stringify({ cookies: validCookies }), (filePath) => {
-    const cookies = loadFacebookCookies({
-      sessionFile: filePath,
-      extractChrome: () => {
-        throw new Error("Chrome should not be read");
-      },
-    });
-
-    assert.deepEqual(
-      cookies.map((cookie) => cookie.name),
-      ["c_user", "xs"],
-    );
-    assert.equal(cookies[0].host, ".facebook.com");
+test("loads the login session format", () => {
+  withSessionFile(JSON.stringify({ version: 1, userAgent: "Browser/150", cookies: validCookies }), (filePath) => {
+    const cookies = loadFacebookCookies({ sessionFile: filePath });
+    assert.deepEqual(cookies.map(cookie => cookie.name), ["c_user", "xs"]);
     assert.equal(cookies[0].httpOnly, true);
-  });
-});
-
-test("falls back to Chrome, normalizes, and persists an invalid session file", () => {
-  withSessionFile("not json", (filePath) => {
-    const cookies = loadFacebookCookies({
-      sessionFile: filePath,
-      chromeProfile: "Profile 1",
-      extractChrome: (domain, profile) => {
-        assert.equal(domain, "facebook.com");
-        assert.equal(profile, "Profile 1");
-        return [
-          {
-            host: ".facebook.com",
-            name: "c_user",
-            value: "fallback-user",
-            path: "/",
-            expires: 0,
-            secure: true,
-            httpOnly: true,
-          },
-          {
-            host: ".facebook.com",
-            name: "xs",
-            value: "fallback-session",
-            path: "/",
-            expires: futureExpiry,
-            secure: true,
-            httpOnly: true,
-          },
-        ];
-      },
-    });
-
-    assert.equal(cookies[0].value, "fallback-user");
-    const snapshot = JSON.parse(readFileSync(filePath, "utf8"));
-    assert.equal(snapshot.version, 1);
-    assert.equal(snapshot.cookies[0].domain, ".facebook.com");
-    assert.equal(snapshot.cookies[1].expirationDate, futureExpiry);
-    assert.equal(lstatSync(filePath).mode & 0o777, 0o600);
   });
 });
 
@@ -135,7 +85,7 @@ test("refuses to overwrite a symbolic-link session file", () => {
             secure: true,
             httpOnly: true,
           },
-        ]),
+        ], "Browser/150"),
       /not a symbolic link/,
     );
     assert.equal(readFileSync(target, "utf8"), "keep me");
@@ -146,7 +96,7 @@ test("refuses to overwrite a symbolic-link session file", () => {
 
 test("rejects files with missing, expired, or non-Facebook session cookies", () => {
   withSessionFile(
-    JSON.stringify([{ ...validCookies[0], expirationDate: 1 }]),
+    JSON.stringify({ version: 1, userAgent: "Browser/150", cookies: [{ ...validCookies[0], expirationDate: 1 }] }),
     (filePath) => {
       assert.throws(
         () => loadFacebookCookiesFromFile(filePath),
@@ -156,10 +106,10 @@ test("rejects files with missing, expired, or non-Facebook session cookies", () 
   );
 
   withSessionFile(
-    JSON.stringify([
+    JSON.stringify({ version: 1, userAgent: "Browser/150", cookies: [
       { ...validCookies[0], domain: ".example.com" },
       validCookies[1],
-    ]),
+    ] }),
     (filePath) => {
       assert.throws(
         () => loadFacebookCookiesFromFile(filePath),
@@ -169,25 +119,12 @@ test("rejects files with missing, expired, or non-Facebook session cookies", () 
   );
 });
 
-test("reports both sources without exposing cookie values when both fail", () => {
-  withSessionFile(
-    JSON.stringify([{ name: "c_user", value: "secret" }]),
-    (filePath) => {
-      assert.throws(
-        () =>
-          loadFacebookCookies({
-            sessionFile: filePath,
-            extractChrome: () => {
-              throw new Error("Keychain unavailable");
-            },
-          }),
-        (error: Error) => {
-          assert.match(error.message, /FACEBOOK_SESSION_FILE/);
-          assert.match(error.message, /Keychain unavailable/);
-          assert.doesNotMatch(error.message, /secret/);
-          return true;
-        },
-      );
-    },
-  );
+test("reports invalid sessions without exposing cookie values", () => {
+  withSessionFile(JSON.stringify({ version: 1, userAgent: "Browser/150", cookies: [{ name: "c_user", value: "secret" }] }), filePath => {
+    assert.throws(() => loadFacebookCookies({ sessionFile: filePath }), (error: Error) => {
+      assert.match(error.message, /npm run login/);
+      assert.doesNotMatch(error.message, /secret/);
+      return true;
+    });
+  });
 });

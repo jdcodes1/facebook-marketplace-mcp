@@ -1,4 +1,4 @@
-import type { z } from "zod";
+import type { z } from "zod/v4";
 import { responseFor, takeWithinCharacterLimit } from "../mcp/response.js";
 import type {
   MarketplaceService,

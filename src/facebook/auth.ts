@@ -27,8 +27,6 @@ export const DEFAULT_FACEBOOK_SESSION_FILE = path.resolve(
   ".local/facebook-session.json",
 );
 
-type CookieExtractor = (domain: string, profile?: string) => FacebookCookie[];
-
 interface CookieFileEntry {
   name?: unknown;
   value?: unknown;
@@ -234,7 +232,9 @@ export function extractChromeCookies(
 export function saveFacebookCookiesToFile(
   filePath: string,
   cookies: FacebookCookie[],
+  userAgent: string,
 ): void {
+  const browserUserAgent = requireUserAgent(userAgent);
   const activeCookies = requireSessionCookies(cookies);
   const directory = path.dirname(filePath);
 
@@ -258,6 +258,7 @@ export function saveFacebookCookiesToFile(
         `${JSON.stringify(
           {
             version: 1,
+            userAgent: browserUserAgent,
             exportedAt: new Date().toISOString(),
             cookies: activeCookies.map((cookie) => ({
               name: cookie.name,
@@ -287,13 +288,27 @@ export function saveFacebookCookiesToFile(
   }
 }
 
-/**
- * Loads cookies from a user-managed JSON file. The file may be a cookie array
- * or an object with a `cookies` array, matching common Chrome-export layouts.
- */
+interface StoredFacebookSession {
+  cookies: FacebookCookie[];
+  userAgent: string;
+}
+
+function requireUserAgent(value: unknown): string {
+  if (typeof value !== "string" || !/^[\x20-\x7e]+$/.test(value) || !value.trim()) {
+    throw new Error("Session requires a valid browser user agent. Run npm run login.");
+  }
+  return value.trim();
+}
+
 export function loadFacebookCookiesFromFile(
   filePath: string,
 ): FacebookCookie[] {
+  return loadFacebookSessionFromFile(filePath).cookies;
+}
+
+export function loadFacebookSessionFromFile(
+  filePath: string,
+): StoredFacebookSession {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(filePath, "utf8"));
@@ -301,17 +316,11 @@ export function loadFacebookCookiesFromFile(
     throw new Error("could not read valid JSON from FACEBOOK_SESSION_FILE");
   }
 
-  const entries = Array.isArray(parsed)
-    ? parsed
-    : isRecord(parsed) && Array.isArray(parsed.cookies)
-      ? parsed.cookies
-      : null;
-
-  if (!entries) {
-    throw new Error(
-      "session file must be a cookie array or an object with a cookies array",
-    );
+  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.cookies)) {
+    throw new Error("Invalid session format. Run npm run login.");
   }
+  const userAgent = requireUserAgent(parsed.userAgent);
+  const entries = parsed.cookies;
 
   const cookies = entries.map((entry, index): FacebookCookie => {
     if (!isRecord(entry)) {
@@ -347,40 +356,30 @@ export function loadFacebookCookiesFromFile(
     };
   });
 
-  return requireSessionCookies(cookies);
+  return {
+    cookies: requireSessionCookies(cookies),
+    userAgent,
+  };
 }
 
-export function loadFacebookCookies(options: {
+export function loadFacebookCookies(
+  options: FacebookCookieLoadOptions,
+): FacebookCookie[] {
+  return loadFacebookSession(options).cookies;
+}
+
+interface FacebookCookieLoadOptions {
   sessionFile?: string;
-  chromeProfile?: string;
-  extractChrome?: CookieExtractor;
-}): FacebookCookie[] {
-  const extractChrome = options.extractChrome ?? extractChromeCookies;
+}
 
-  if (!options.sessionFile) {
-    return extractChrome("facebook.com", options.chromeProfile);
-  }
-
+export function loadFacebookSession(
+  options: FacebookCookieLoadOptions,
+): StoredFacebookSession {
   try {
-    return loadFacebookCookiesFromFile(options.sessionFile);
-  } catch (fileError) {
-    try {
-      const cookies = requireSessionCookies(
-        extractChrome("facebook.com", options.chromeProfile),
-      );
-      saveFacebookCookiesToFile(options.sessionFile, cookies);
-      return cookies;
-    } catch (chromeError) {
-      const fileMessage =
-        fileError instanceof Error ? fileError.message : "unknown file error";
-      const chromeMessage =
-        chromeError instanceof Error
-          ? chromeError.message
-          : "unknown Chrome error";
-      throw new Error(
-        `Could not load Facebook cookies from FACEBOOK_SESSION_FILE (${fileMessage}) or Chrome (${chromeMessage}). Run npm run login after signing in to Facebook.`,
-      );
-    }
+    return loadFacebookSessionFromFile(options.sessionFile ?? DEFAULT_FACEBOOK_SESSION_FILE);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid session";
+    throw new Error(`Could not load FACEBOOK_SESSION_FILE: ${message} Run npm run login.`);
   }
 }
 
