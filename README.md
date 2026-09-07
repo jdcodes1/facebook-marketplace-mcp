@@ -65,16 +65,19 @@ args = ["/path/to/facebook-marketplace-mcp/dist/index.js"]
 
 Search Marketplace by query, location, and filters.
 
-| Parameter   | Type   | Required | Description                 |
-| ----------- | ------ | -------- | --------------------------- |
-| `query`     | string | yes      | Search term                 |
-| `latitude`  | number | yes      | Latitude of search center   |
-| `longitude` | number | yes      | Longitude of search center  |
-| `radius_km` | number | no       | Search radius (default: 50) |
-| `min_price` | number | no       | Min price in dollars        |
-| `max_price` | number | no       | Max price in dollars        |
-| `category`  | string | no       | Category ID                 |
-| `limit`     | number | no       | Max results (default: 20)   |
+| Parameter         | Type   | Required | Description                                                                                   |
+| ----------------- | ------ | -------- | --------------------------------------------------------------------------------------------- |
+| `query`           | string | yes      | Search term                                                                                   |
+| `latitude`        | number | yes      | Latitude of search center                                                                     |
+| `longitude`       | number | yes      | Longitude of search center                                                                    |
+| `radius_km`       | number | no       | Search radius (default: 50)                                                                   |
+| `min_price`       | number | no       | Min price in dollars                                                                          |
+| `max_price`       | number | no       | Max price in dollars                                                                          |
+| `category`        | string | no       | Category ID                                                                                   |
+| `sort_by`         | string | no       | `suggested` (default), `distance`, `date_listed`, `price_low_to_high`, or `price_high_to_low` |
+| `delivery_method` | string | no       | `all` (default), `local_pickup`, or `shipping`                                                |
+| `date_listed`     | string | no       | `all` (default), `last_24_hours`, `last_7_days`, or `last_30_days`                            |
+| `limit`           | number | no       | Max results (default: 20)                                                                     |
 
 ### `facebook_marketplace_get_listing`
 
@@ -125,11 +128,13 @@ Delete a saved monitor.
 
 ## Configuration
 
-| Env Variable            | Default                   | Description                                                        |
-| ----------------------- | ------------------------- | ------------------------------------------------------------------ |
-| `CHROME_PROFILE`        | `Default`                 | Chrome profile directory name                                      |
-| `FACEBOOK_SESSION_FILE` | `.local/facebook-session.json` | Cookie snapshot path; used before Chrome extraction |
-| `MCP_ERROR_LOG_PATH`    | `.local/mcp-errors.jsonl` | Alternate path for sanitized failed-tool diagnostics               |
+| Env Variable            | Default                        | Description                                          |
+| ----------------------- | ------------------------------ | ---------------------------------------------------- |
+| `CHROME_PROFILE`        | `Default`                      | Chrome profile directory name                        |
+| `FACEBOOK_SESSION_FILE` | `.local/facebook-session.json` | Cookie snapshot path; used before Chrome extraction  |
+| `MCP_ERROR_LOG_PATH`    | `.local/mcp-errors.jsonl`      | Alternate path for sanitized failed-tool diagnostics |
+| `MCP_CAPTURE_LISTING_HTML` | unset | Set to `1` to retain exact direct listing-page HTML locally |
+| `MCP_LISTING_CAPTURE_DIR` | `.local/listing-page-captures` | Alternate directory for opted-in raw HTML captures |
 
 ### Failed-request diagnostics
 
@@ -143,6 +148,20 @@ and safe Facebook request metadata such as the operation, path, status, and
 GraphQL document ID. They never include cookies, authorization or CSRF values,
 page tokens, request bodies, raw headers, HTML, or response bodies. The server
 continues returning the original MCP tool error if diagnostic writing fails.
+
+### Opt-in raw listing-page captures
+
+Set `MCP_CAPTURE_LISTING_HTML=1` to save the exact HTML response from every
+direct listing-page request, including successful, login, block, and error
+pages. Captures are written before response status handling and parsing, so
+they can be compared later when Facebook markup changes.
+
+Raw captures are separate from `mcp-errors.jsonl`, never appear in MCP output,
+and are stored as `0600` files in a `0700` directory. They can contain private
+Facebook page data, are not pruned automatically, and must not be committed or
+shared. Set `MCP_LISTING_CAPTURE_DIR` to use another protected local directory;
+remove captures manually when they are no longer needed. A capture-write failure
+is reported only on stderr and does not alter the request result.
 
 ### Cookie file authentication
 

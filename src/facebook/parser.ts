@@ -124,8 +124,8 @@ function findListingNodeInPage(html: string, listingId: string): JsonRecord | nu
   const blocks = html.matchAll(
     /<script[^>]+type=["']application\/json["'][^>]*>(.*?)<\/script>/gis
   );
-  const merged: JsonRecord = {};
-  let matched = false;
+  const candidates: JsonRecord[] = [];
+  const listingIds = new Set([listingId]);
 
   for (const block of blocks) {
     let payload: unknown;
@@ -137,19 +137,35 @@ function findListingNodeInPage(html: string, listingId: string): JsonRecord | nu
 
     const seen = new Set<object>();
     const queue: unknown[] = [payload];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (!isRecord(current) || seen.has(current)) continue;
+    for (let index = 0; index < queue.length; index++) {
+      const current = queue[index];
+      if ((!isRecord(current) && !Array.isArray(current)) || seen.has(current)) continue;
       seen.add(current);
 
-      if (String(current.id) === listingId && isListingNode(current)) {
-        mergeMissing(merged, current);
-        matched = true;
+      if (isRecord(current) && isListingNode(current)) {
+        candidates.push(current);
+        // The public URL can use product_item.id while Relay fragments share
+        // a different listing ID. Resolve that link before merging fragments.
+        if (
+          isRecord(current.product_item) &&
+          textValue(current.product_item.id) === listingId &&
+          textValue(current.id)
+        ) {
+          listingIds.add(textValue(current.id));
+        }
       }
       queue.push(...Object.values(current));
     }
   }
 
+  const merged: JsonRecord = {};
+  let matched = false;
+  for (const candidate of candidates) {
+    if (listingIds.has(textValue(candidate.id))) {
+      mergeMissing(merged, candidate);
+      matched = true;
+    }
+  }
   return matched ? merged : null;
 }
 
@@ -212,6 +228,12 @@ export function parseListingDetailFromPage(
     const sellerId = textValue(seller?.id);
     if (sellerId) detail.seller.profileUrl = `https://www.facebook.com/${sellerId}`;
     detail.condition = textValue(listing.condition) || textValue(listing.condition_text);
+    if (!detail.condition && Array.isArray(listing.attribute_data)) {
+      const condition = listing.attribute_data.find(
+        (attribute) => isRecord(attribute) && attribute.attribute_name === "Condition"
+      );
+      if (isRecord(condition)) detail.condition = textValue(condition.label);
+    }
     detail.isPending = listing.is_pending === true;
     if (typeof listing.creation_time === "number") {
       detail.postedDate = new Date(listing.creation_time * 1000).toISOString();
@@ -232,6 +254,7 @@ export function parseListingDetailFromPage(
         if (uri && !detail.images.includes(uri)) detail.images.push(uri);
       }
     }
+    if (!detail.imageUrl) detail.imageUrl = detail.images[0] ?? "";
   }
 
   // Open Graph metadata belongs to the current page and is a safe fallback for

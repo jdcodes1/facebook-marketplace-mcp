@@ -67,6 +67,24 @@ const searchFields = {
 export const searchListingsInput = z
   .object({
     ...searchFields,
+    sort_by: z
+      .enum([
+        "suggested",
+        "distance",
+        "date_listed",
+        "price_low_to_high",
+        "price_high_to_low",
+      ])
+      .default("suggested")
+      .describe("Result order (default: suggested)."),
+    delivery_method: z
+      .enum(["all", "local_pickup", "shipping"])
+      .default("all")
+      .describe("Listing delivery method (default: all)."),
+    date_listed: z
+      .enum(["all", "last_24_hours", "last_7_days", "last_30_days"])
+      .default("all")
+      .describe("When listings were posted (default: all)."),
     limit: z
       .number()
       .int()

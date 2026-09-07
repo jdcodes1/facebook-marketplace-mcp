@@ -17,6 +17,7 @@ import {
   buildLocationSearchVariables,
 } from "./queries.js";
 import { parseSearchResponse, parseListingDetailFromPage } from "./parser.js";
+import { captureListingPageHtml } from "./raw-capture.js";
 import { RateLimiter } from "../utils/rate-limit.js";
 import {
   MarketplaceRequestError,
@@ -317,6 +318,11 @@ export class FacebookClient {
       request,
     );
 
+    // Capture before examining the response so opted-in diagnostics retain
+    // successful pages as well as login, block, and error pages.
+    const html = await res.text();
+    await captureListingPageHtml(listingId, html);
+
     if (!res.ok) {
       throw new MarketplaceRequestError(
         `Failed to fetch listing ${listingId}: ${res.status}`,
@@ -327,7 +333,6 @@ export class FacebookClient {
       );
     }
 
-    const html = await res.text();
     try {
       return parseListingDetailFromPage(html, listingId);
     } catch (error) {

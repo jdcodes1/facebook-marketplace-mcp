@@ -20,6 +20,9 @@ export function createSearchListingsHandler(service: MarketplaceService) {
         minPrice: args.min_price,
         maxPrice: args.max_price,
         category: args.category,
+        sortBy: args.sort_by,
+        deliveryMethod: args.delivery_method,
+        dateListed: args.date_listed,
         limit: args.limit,
         cursor: args.cursor,
       });

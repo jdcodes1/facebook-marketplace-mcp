@@ -13,6 +13,7 @@
     "inspector": "npm run build && mcp-inspector node dist/index.js",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "login": "tsx src/facebook/login.ts",
     "capture-queries": "tsx scripts/capture-queries.ts"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "@modelcontextprotocol/inspector": "^2.5.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
+    "playwright": "^1.62.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   },
