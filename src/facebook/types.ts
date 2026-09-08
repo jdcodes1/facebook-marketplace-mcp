@@ -28,6 +28,8 @@ export interface MarketplaceListing {
   postedDate: string;
   url: string;
   isPending: boolean;
+  /** Set when the search response lacked listing fields and only an id was recoverable. */
+  needsHydration?: boolean;
 }
 
 export interface MarketplaceListingDetail extends MarketplaceListing {

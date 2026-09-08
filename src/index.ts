@@ -21,7 +21,10 @@ import {
 } from "./tools/monitor.js";
 
 const client = new FacebookClient({
-  maxRequestsPerMinute: 3,
+  maxRequestsPerMinute: Number(process.env.MAX_REQUESTS_PER_MINUTE ?? 3),
+  maxPageFetchesPerMinute: Number(
+    process.env.MAX_PAGE_FETCHES_PER_MINUTE ?? 30
+  ),
   chromeProfile: process.env.CHROME_PROFILE ?? "Default",
 });
 

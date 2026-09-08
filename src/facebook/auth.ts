@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import Database from "better-sqlite3";
@@ -67,20 +68,57 @@ function decryptCookieValue(encrypted: Buffer, key: Buffer): string {
   return decoded.toString("utf8");
 }
 
-function getCookieDbPath(profile = "Default"): string {
-  return path.join(
-    os.homedir(),
-    "Library/Application Support/Google/Chrome",
-    profile,
-    "Cookies"
+const CHROME_DIR = path.join(
+  os.homedir(),
+  "Library/Application Support/Google/Chrome"
+);
+
+/**
+ * Chrome's on-disk profile directories are named "Default", "Profile 1", etc.,
+ * while the UI shows a display name ("Personal", "Work"). Accept either: if
+ * the given name isn't a directory, look it up in Chrome's Local State index.
+ */
+export function resolveChromeProfile(profile: string): string {
+  if (fs.existsSync(path.join(CHROME_DIR, profile, "Cookies"))) {
+    return profile;
+  }
+
+  let infoCache: Record<string, { name?: string }>;
+  try {
+    const localState = JSON.parse(
+      fs.readFileSync(path.join(CHROME_DIR, "Local State"), "utf8")
+    );
+    infoCache = localState?.profile?.info_cache ?? {};
+  } catch {
+    throw new Error(
+      `Chrome profile "${profile}" not found at ${CHROME_DIR} and Local State ` +
+        "could not be read to resolve it by display name."
+    );
+  }
+
+  const wanted = profile.trim().toLowerCase();
+  for (const [dir, info] of Object.entries(infoCache)) {
+    if ((info?.name ?? "").trim().toLowerCase() === wanted) return dir;
+  }
+
+  const available = Object.entries(infoCache)
+    .map(([dir, info]) => `${dir} ("${info?.name ?? "?"}")`)
+    .join(", ");
+  throw new Error(
+    `Chrome profile "${profile}" not found. CHROME_PROFILE must be a profile ` +
+      `directory name or its display name. Available: ${available || "none"}.`
   );
+}
+
+function getCookieDbPath(profile: string): string {
+  return path.join(CHROME_DIR, profile, "Cookies");
 }
 
 export function extractChromeCookies(
   domain: string,
   profile = "Default"
 ): FacebookCookie[] {
-  const cookiePath = getCookieDbPath(profile);
+  const cookiePath = getCookieDbPath(resolveChromeProfile(profile));
 
   // Chrome locks the DB while running — copy it first
   const tmpPath = path.join(os.tmpdir(), `chrome_cookies_${Date.now()}`);

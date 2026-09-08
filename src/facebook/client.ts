@@ -41,16 +41,23 @@ const BROWSER_HEADERS: Record<string, string> = {
 export class FacebookClient {
   private session: FacebookSession | null = null;
   private rateLimiter: RateLimiter;
+  private pageRateLimiter: RateLimiter;
   private reqCounter = 0;
   private chromeProfile: string;
 
   constructor(
     options: {
       maxRequestsPerMinute?: number;
+      maxPageFetchesPerMinute?: number;
       chromeProfile?: string;
     } = {}
   ) {
     this.rateLimiter = new RateLimiter(options.maxRequestsPerMinute ?? 3);
+    // Listing pages are plain document loads rather than API calls, and search
+    // hydration needs one per result, so they get a separate, higher budget.
+    this.pageRateLimiter = new RateLimiter(
+      options.maxPageFetchesPerMinute ?? 30
+    );
     this.chromeProfile = options.chromeProfile ?? "Default";
   }
 
@@ -211,7 +218,38 @@ export class FacebookClient {
   async searchListings(params: SearchParams): Promise<SearchResult> {
     const variables = buildSearchVariables(params);
     const data = await this.graphqlRequest(MARKETPLACE_SEARCH_DOC_ID, variables);
-    return parseSearchResponse(data);
+    const result = parseSearchResponse(data);
+
+    // Facebook ignores the requested `count` and returns a fixed page (~24), so
+    // enforce the limit here. This matters before hydration, which costs one
+    // page fetch per listing.
+    if (params.limit > 0 && result.listings.length > params.limit) {
+      result.listings = result.listings.slice(0, params.limit);
+      result.hasNextPage = true;
+    }
+
+    const stubs = result.listings.filter((l) => l.needsHydration);
+    if (stubs.length === 0) return result;
+
+    // The search response carried ids only, so fetch each listing page to fill
+    // in title, price, location and seller. Sequential to respect the limiter.
+    for (const stub of stubs) {
+      try {
+        const detail = await this.fetchListingPage(stub.id);
+        stub.title = detail.title;
+        stub.price = detail.price || "N/A";
+        stub.location = detail.location || "Unknown";
+        stub.sellerName = detail.sellerName || "Unknown";
+        stub.postedDate = detail.postedDate;
+        stub.imageUrl = detail.imageUrl;
+        stub.isPending = detail.isPending;
+        delete stub.needsHydration;
+      } catch {
+        // Leave the stub as-is; the id and url are still useful.
+      }
+    }
+
+    return result;
   }
 
   async getListingDetail(listingId: string): Promise<MarketplaceListingDetail> {
@@ -225,8 +263,14 @@ export class FacebookClient {
     }
 
     // Fallback: fetch the listing page directly and parse embedded data
+    return this.fetchListingPage(listingId);
+  }
+
+  private async fetchListingPage(
+    listingId: string
+  ): Promise<MarketplaceListingDetail> {
     const session = await this.ensureSession();
-    await this.rateLimiter.wait();
+    await this.pageRateLimiter.wait();
 
     const url = `https://www.facebook.com/marketplace/item/${listingId}/`;
     const res = await fetch(url, {
