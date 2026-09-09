@@ -23,6 +23,7 @@ import {
 const client = new FacebookClient({
   maxRequestsPerMinute: 3,
   chromeProfile: process.env.CHROME_PROFILE ?? "Default",
+  browser: process.env.BROWSER ?? "chrome",
 });
 
 const server = new McpServer({
