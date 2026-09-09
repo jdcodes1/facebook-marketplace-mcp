@@ -8,6 +8,8 @@ import {
   extractChromeCookies,
   cookiesToHeader,
   getCookieValue,
+  resolveBrowserName,
+  type BrowserName,
 } from "./auth.js";
 import {
   MARKETPLACE_SEARCH_DOC_ID,
@@ -22,15 +24,21 @@ import { RateLimiter } from "../utils/rate-limit.js";
 const GRAPHQL_URL = "https://www.facebook.com/api/graphql/";
 const MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
 
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+const IS_WINDOWS = process.platform === "win32";
+
+// Facebook's fraud detection checks that sec-ch-ua-platform / the User-Agent
+// OS token are consistent with the client — spoof whichever OS we're
+// actually pulling cookies from rather than hardcoding macOS.
+const USER_AGENT = IS_WINDOWS
+  ? "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+  : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
 const BROWSER_HEADERS: Record<string, string> = {
   "User-Agent": USER_AGENT,
   "Accept-Language": "en-US,en;q=0.9",
   "sec-ch-ua": '"Chromium";v="146", "Google Chrome";v="146", "Not?A_Brand";v="99"',
   "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"macOS"',
+  "sec-ch-ua-platform": IS_WINDOWS ? '"Windows"' : '"macOS"',
   "sec-fetch-dest": "document",
   "sec-fetch-mode": "navigate",
   "sec-fetch-site": "none",
@@ -43,15 +51,18 @@ export class FacebookClient {
   private rateLimiter: RateLimiter;
   private reqCounter = 0;
   private chromeProfile: string;
+  private browser: BrowserName;
 
   constructor(
     options: {
       maxRequestsPerMinute?: number;
       chromeProfile?: string;
+      browser?: string;
     } = {}
   ) {
     this.rateLimiter = new RateLimiter(options.maxRequestsPerMinute ?? 3);
     this.chromeProfile = options.chromeProfile ?? "Default";
+    this.browser = resolveBrowserName(options.browser);
   }
 
   async ensureSession(): Promise<FacebookSession> {
@@ -60,18 +71,22 @@ export class FacebookClient {
   }
 
   async initSession(): Promise<FacebookSession> {
-    const cookies = extractChromeCookies("facebook.com", this.chromeProfile);
+    const cookies = extractChromeCookies(
+      "facebook.com",
+      this.chromeProfile,
+      this.browser
+    );
 
     if (cookies.length === 0) {
       throw new Error(
-        "No Facebook cookies found in Chrome. Make sure you're logged into Facebook in Chrome."
+        "No Facebook cookies found. Make sure you're logged into Facebook in the configured browser."
       );
     }
 
     const userId = getCookieValue(cookies, "c_user");
     if (!userId) {
       throw new Error(
-        "No c_user cookie found. Make sure you're logged into Facebook in Chrome."
+        "No c_user cookie found. Make sure you're logged into Facebook in the configured browser."
       );
     }
 

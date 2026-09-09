@@ -26,10 +26,15 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
-const CHROME_USER_DATA = path.join(
-  os.homedir(),
-  "Library/Application Support/Google/Chrome"
-);
+const CHROME_USER_DATA =
+  process.platform === "win32"
+    ? path.join(
+        process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
+        "Google",
+        "Chrome",
+        "User Data"
+      )
+    : path.join(os.homedir(), "Library/Application Support/Google/Chrome");
 
 interface CapturedQuery {
   docId: string;
