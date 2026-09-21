@@ -4,3 +4,4 @@ dist/
 .env.local
 *.db
 /tmp/
+captured-queries.json

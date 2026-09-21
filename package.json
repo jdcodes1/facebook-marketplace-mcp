@@ -21,7 +21,11 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.0.0",
+    "playwright": "^1.63.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@11.10.0": true
   }
 }

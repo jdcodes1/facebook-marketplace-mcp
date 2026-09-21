@@ -14,7 +14,7 @@
  *   npm run capture-queries
  *
  * This will:
- * 1. Open Chromium with your Chrome profile (so you're logged in)
+ * 1. Open Chrome with a dedicated capture profile (log in to Facebook on first run)
  * 2. Navigate to Facebook Marketplace
  * 3. Perform a sample search
  * 4. Log all GraphQL doc_ids it finds
@@ -26,10 +26,11 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 
-const CHROME_USER_DATA = path.join(
-  os.homedir(),
-  "Library/Application Support/Google/Chrome"
-);
+// Chrome refuses remote debugging on its default profile directory, so use a
+// dedicated one. Log into Facebook once in the window it opens; the login persists.
+const CHROME_USER_DATA =
+  process.env.CAPTURE_PROFILE_DIR ??
+  path.join(os.homedir(), ".facebook-marketplace-mcp", "capture-profile");
 
 interface CapturedQuery {
   docId: string;
@@ -51,10 +52,34 @@ async function main() {
 
   const page = browser.pages()[0] ?? (await browser.newPage());
 
-  // Intercept GraphQL requests
-  page.on("request", (req) => {
+  // Intercept GraphQL requests (context-level so popups/new tabs are covered)
+  const allPosts = new Set<string>();
+
+  // Relay persisted queries are registered in JS bundles as
+  // __d("<OperationName>_facebookRelayOperation", ..., e.exports="<doc_id>")
+  // so scan loaded scripts for them; this works even when results are server-rendered.
+  const relayOps = new Map<string, string>();
+  browser.on("response", async (res) => {
+    try {
+      const ct = res.headers()["content-type"] ?? "";
+      if (!ct.includes("javascript")) return;
+      const body = await res.text();
+      const re = /__d\("([A-Za-z0-9_]+)_facebookRelayOperation"[^"]*?"(\d{8,})"/g;
+      for (const m of body.matchAll(re)) {
+        if (/marketplace|location|commerce|geo/i.test(m[1])) {
+          relayOps.set(m[1], m[2]);
+        }
+      }
+    } catch {
+      // response body unavailable (e.g. redirect); ignore
+    }
+  });
+  browser.on("request", (req) => {
     const url = req.url();
-    if (url.includes("/api/graphql")) {
+    if (req.method() === "POST") {
+      allPosts.add(url.split("?")[0]);
+    }
+    if (url.includes("graphql")) {
       const postData = req.postData() ?? "";
       const params = new URLSearchParams(postData);
       const docId = params.get("doc_id") ?? "";
@@ -88,35 +113,54 @@ async function main() {
     }
   });
 
-  console.log("Navigating to Facebook Marketplace...");
-  await page.goto("https://www.facebook.com/marketplace/", {
-    waitUntil: "networkidle",
-    timeout: 30000,
-  });
-
-  console.log("\nPage loaded. Performing a sample search...");
-  await page.waitForTimeout(3000);
-
-  // Try to search
   try {
-    const searchInput = page.locator(
-      'input[placeholder*="Search"], input[aria-label*="Search"]'
-    );
-    if (await searchInput.isVisible({ timeout: 5000 })) {
-      await searchInput.fill("laptop");
-      await searchInput.press("Enter");
-      await page.waitForTimeout(5000);
+    console.log("Navigating to Facebook Marketplace...");
+    await page.goto("https://www.facebook.com/marketplace/", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    // First run: wait (up to 5 minutes) for the user to log in.
+    if (/login|checkpoint/.test(page.url())) {
+      console.log("\n🔑 Not logged in. Log into Facebook in the browser window...");
+      await page.waitForURL((u) => !/login|checkpoint/.test(u.toString()), {
+        timeout: 300000,
+      });
+      await page.goto("https://www.facebook.com/marketplace/", {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
     }
-  } catch {
-    console.log("Could not find search input. Try searching manually.");
+
+    console.log("\nPage loaded. Performing a sample search...");
+    await page.waitForTimeout(3000);
+
+    // Go straight to a search results page and scroll to trigger follow-up queries
+    await page.goto("https://www.facebook.com/marketplace/search?query=laptop", {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    for (let i = 0; i < 4; i++) {
+      await page.mouse.wheel(0, 2500);
+      await page.waitForTimeout(1500);
+    }
+
+    console.log("\n⏳ Waiting 30 seconds for more queries...");
+    console.log("   Browse around Marketplace to capture more doc_ids.");
+    console.log("   Click on listings, change categories, etc.\n");
+    await page.waitForTimeout(30000);
+
+  } catch (err) {
+    console.error("\n⚠️  Capture step failed; saving what was collected so far:", err);
+  } finally {
+    await browser.close();
   }
 
-  console.log("\n⏳ Waiting 30 seconds for more queries...");
-  console.log("   Browse around Marketplace to capture more doc_ids.");
-  console.log("   Click on listings, change categories, etc.\n");
-  await page.waitForTimeout(30000);
+  console.log("\nMarketplace-related Relay operations found in JS bundles:");
+  for (const [name, id] of [...relayOps].sort()) console.log(`  ${id}  ${name}`);
 
-  await browser.close();
+  console.log("\nPOST endpoints seen:");
+  for (const u of allPosts) console.log(`  ${u}`);
 
   // Deduplicate and display results
   const unique = new Map<string, CapturedQuery>();
@@ -143,7 +187,11 @@ async function main() {
   );
   fs.writeFileSync(
     outputPath,
-    JSON.stringify([...unique.values()], null, 2)
+    JSON.stringify(
+      { requests: [...unique.values()], relayOperations: Object.fromEntries(relayOps) },
+      null,
+      2
+    )
   );
   console.log(`\nSaved to ${outputPath}`);
   console.log(

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import Database from "better-sqlite3";
 import type { FacebookCookie } from "./types.js";
 
@@ -68,12 +69,16 @@ function decryptCookieValue(encrypted: Buffer, key: Buffer): string {
 }
 
 function getCookieDbPath(profile = "Default"): string {
-  return path.join(
+  const profileDir = path.join(
     os.homedir(),
     "Library/Application Support/Google/Chrome",
-    profile,
-    "Cookies"
+    profile
   );
+  // Chrome 96+ keeps live cookies in Network/Cookies; the legacy path may be stale.
+  const networkPath = path.join(profileDir, "Network", "Cookies");
+  return fs.existsSync(networkPath)
+    ? networkPath
+    : path.join(profileDir, "Cookies");
 }
 
 export function extractChromeCookies(

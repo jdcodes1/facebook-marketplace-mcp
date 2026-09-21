@@ -2,7 +2,7 @@
 // These are hashed operation identifiers that Facebook rotates on deploys.
 // Run `npm run capture-queries` to discover current values if these break.
 
-export const MARKETPLACE_SEARCH_DOC_ID = "7111939778879383";
+export const MARKETPLACE_SEARCH_DOC_ID = "27212616558440397";
 export const LOCATION_SEARCH_DOC_ID = "5585904654783609";
 
 // Listing detail uses a different approach — we extract the doc_id dynamically
